@@ -195,13 +195,13 @@ AI 컴퓨터 자세교정 & 스트레칭 코치
 
 ## 8. 기술 구성과 AI 학습 계획
 
-관절 인식은 자체 개발 모델의 정확도를 보고 MediaPipe 사용 여부를 결정하고, **자세 판정 모델만 직접 구축한 데이터로 학습**합니다. 모든 분석은 사용자 PC 안에서 이뤄지며 서버가 필요 없습니다.
+관절 인식은 사전학습된 Google MediaPipe Pose를 그대로 쓰고, **자세 판정 모델만 직접 구축한 데이터로 학습**합니다. 모든 분석은 사용자 PC 안에서 이뤄지며 서버가 필요 없습니다.
 
 **기술 스택**
 
 | 역할 | 기술 |
 | --- | --- |
-| 관절 인식 | 자체 개발 모델 또는 MediaPipe Pose Landmarker (정확도 비교 후 결정) |
+| 관절 인식 | Google MediaPipe Pose Landmarker (관절 33개) |
 | 떨림 보정 | One Euro Filter |
 | 데스크톱 위젯·교정 유도 화면 | Electron (투명하고 항상 위에 떠 있는 창) |
 | 캐릭터 | Rive 애니메이션(또는 상태별 이미지), 메뉴바는 Electron Tray |
@@ -214,31 +214,17 @@ AI 컴퓨터 자세교정 & 스트레칭 코치
 
 | 층 | 하는 일 | 방법 |
 | --- | --- | --- |
-| ① 인식 | 영상에서 관절 좌표 추출 | 자체 개발 모델 vs MediaPipe(사전학습), 정확도 비교 후 결정 |
+| ① 인식 | 영상에서 관절 좌표 추출 | MediaPipe (사전학습 모델, 그대로 사용) |
 | ② 판정 | 정상·거북목·기울어짐 등 구분 | 1차 규칙 기반 → 2차 Random Forest (직접 학습) |
 | ③ 개인화 | 사람마다 다른 평소 자세 반영 | 개인 기준선 대비 차이값 |
 
-**관절 인식 모델 후보와 비교 방법**
+**관절 인식: Google MediaPipe Pose**
 
-관절 인식 모델은 정확도 비교로 결정합니다. 어떤 모델을 쓰든 결과를 **공통 형식(COCO 17개 관절 + 신뢰도)**으로 바꿔 넘겨서, 모델을 바꿔도 특징 계산·판정·동물 위젯은 그대로 쓸 수 있게 합니다.
-
-| 후보 | 관절 수 | 실행 방식 | 특징 | 주의 |
-| --- | --- | --- | --- | --- |
-| MediaPipe Pose | 33개 | JS에서 바로 실행 | 웹캠 연결부터 실행까지 한 번에 제공 | 우리 환경에 맞춘 추가 학습은 어려움 |
-| MoveNet | 17개 | TensorFlow.js | 아주 가볍고 빠름 | 얼굴 쪽 점이 적음 |
-| 자체 모델 (RTMPose 파인튜닝) | 17개 이상 | ONNX 변환 후 onnxruntime | 정면 웹캠·상체에 특화 가능, Apache-2.0 | 전처리·결과 해석을 직접 구현 |
-
-- 자체 모델은 처음부터 학습하지 않고 기존 모델을 우리 데이터로 파인튜닝합니다. 처음부터 학습하려면 수만 장의 데이터가 필요합니다.
-- YOLO-Pose는 정확도가 높지만 AGPL 라이선스라 상업적 출시 시 제약이 있어 후보에서 제외합니다.
-- 17개 형식에는 입 좌표가 없어, 턱 괴기는 코 위치로 대신 판정합니다.
-
-**비교 방법**
-
-1. **주 기준은 최종 자세 판정 정확도**입니다. 관절 인식부터 판정까지 거쳐 거북목·어깨 기울어짐 등을 맞게 맞혔는지 봅니다.
-2. 보조 기준은 관절 정확도(PCK, 오차 범위 안에 들어온 관절 비율)입니다. 정답 관절 위치를 사람이 직접 찍어야 해서 시간이 남으면 진행합니다.
-3. 모든 후보를 **같은 테스트 데이터**, **학습에 안 쓴 사람**으로 비교합니다. MediaPipe도 17개 형식으로 맞춰 비교합니다.
-4. 조명(밝음·어두움·역광), 옷, 안경 등 조건별로 나눠 결과를 봅니다. 특히 상체만 크게 나오는 노트북 웹캠 화면을 포함합니다.
-5. 정확도가 비슷하면 노트북에서의 처리 속도(초당 처리 횟수, CPU 사용량)로 결정합니다.
+- 추가 학습 없이 노트북 CPU에서 실시간으로 돌아갑니다.
+- 관절 33개에 귀·입·손목이 포함돼 거북목 추정과 턱 괴기 판정에 유리합니다.
+- JS·Electron에서 웹캠 연결부터 실행까지 바로 쓸 수 있습니다. 라이선스는 Apache-2.0입니다.
+- 공개 데이터 MultiPosture가 MediaPipe 좌표 형식이라 판정 모델 학습에 바로 쓸 수 있습니다.
+- 어두운 조명과 상체만 크게 나오는 노트북 웹캠 화면에서 잘 잡히는지는 데이터 확인 단계에서 점검합니다.
 
 **학습 절차**
 
@@ -252,10 +238,12 @@ AI 컴퓨터 자세교정 & 스트레칭 코치
 
 **참고 공개 데이터**
 
-- [Kaggle Posture Keypoints Detection](https://www.kaggle.com/datasets/melsmm/posture-keypoints-detection): 앉은 자세 관절 라벨, 판정 규칙 1차 검증용
+- [MultiPosture](https://zenodo.org/records/14230872): 13명, MediaPipe 관절 좌표 CSV, 상체 5종·하체 7종 라벨 (CC BY 4.0). 판정 모델 학습에 바로 사용
+- [posture\_correction\_v4](https://universe.roboflow.com/posturecorrection/posture_correction_v4): 4,666장, 고개·어깨·구부정 라벨 (CC BY 4.0). 부위별 판정 학습용
+- [Sitting Posture Detection (frontposture)](https://universe.roboflow.com/frontposture/sitting-posture-detection-3933f-jkzts): 490장, 숙임·기대기·구부정 라벨. 정면 판정 학습·테스트용
+- [Roboflow Sitting Posture](https://universe.roboflow.com/dataset-sqm0h/sitting-posture-ezkda): 938장, 바른/나쁜 자세 (CC BY 4.0). 전체 판정 테스트용
+- [Kaggle Posture Keypoints Detection](https://www.kaggle.com/datasets/melsmm/posture-keypoints-detection): 앉은 자세 관절 라벨, 관절 인식 정확도 점검용
 - [Zenodo Forward Head Posture](https://zenodo.org/records/17550555): 92명의 CVA 측정값, 거북목 기준 각도의 근거
-- [SitPose](https://arxiv.org/html/2412.12216v1): 앉은 자세 7종, 라벨 체계 참고
-- AI Hub 피트니스 자세 이미지: 스트레칭 따라 하기 확인 기능 참고
 
 정면 웹캠 + 책상 앉은 자세에 맞는 대규모 공개 데이터는 없어서, 실제 판정은 직접 구축한 데이터로 맞춥니다.
 
@@ -315,4 +303,4 @@ AI 컴퓨터 자세교정 & 스트레칭 코치
 
 - [ ] 팀 인원과 담당자
 - [ ] 제출·발표 일정 (공모전, 수업 과제 등 용도)
-- [ ] 대표 동물과 디자인, 관절 인식 모델 결정(자체 개발 vs MediaPipe)
+- [ ] 대표 동물과 디자인
