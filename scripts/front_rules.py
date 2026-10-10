@@ -1,7 +1,8 @@
 """정면 웹캠용 개인 기준선 규칙 판정.
 처음 몇 초 바른 자세로 앉아 기준값을 재고, 이후에는 '지금 값 - 기준값'으로 부위별 문제를 찾는다.
 방향(오른쪽/왼쪽)은 거울 모드 화면 기준이다. 거울처럼 화면 오른쪽 = 사용자 오른쪽."""
-import time
+import json, time
+from pathlib import Path
 from math import atan2, degrees, hypot
 import numpy as np
 
@@ -105,6 +106,31 @@ def detect_issues(m, base, t=TH, k_std=None):
     if m["chin_rest"] < t["chin"]:
         out.append(("arm", "chin", "턱을 괴고 있어요", "CHIN REST"))
     return out
+
+
+def smooth(prev, m, alpha=0.3):
+    """지표 떨림 완화(지수 이동 평균). prev가 None이면 m 그대로."""
+    return m if prev is None else {k: (1 - alpha) * prev[k] + alpha * m[k] for k in m}
+
+
+def save_baseline(path, base, session, camera):
+    """기준값을 파일로 저장해 다음 실행 때 다시 쓰게 한다. 숫자만 저장."""
+    Path(path).write_text(json.dumps({"version": 1, "session": session, "camera": camera, "saved": time.time(),
+                                      "mean": {k: float(base[k]) for k in METRICS},
+                                      "std": {k: float(v) for k, v in base.get("_std", {}).items()}}, ensure_ascii=False))
+
+
+def load_baseline(path, camera):
+    """저장된 기준값을 읽는다. 다른 카메라에서 잰 값이거나 형식이 다르면 (None, None)."""
+    try:
+        d = json.loads(Path(path).read_text())
+        if d.get("version") != 1 or d.get("camera") != camera:
+            return None, None
+        base = {k: d["mean"][k] for k in METRICS}
+        base["_std"] = d.get("std", {})
+        return base, d.get("session")
+    except (OSError, ValueError, KeyError):
+        return None, None
 
 
 class IssueTracker:
