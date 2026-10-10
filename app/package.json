@@ -7,12 +7,83 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "test": "node test/run.js"
+    "test": "node test/run.js",
+    "dist:mac": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
+    "dist:win": "electron-builder --win"
   },
   "devDependencies": {
-    "electron": "^44.7.0"
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1"
+  },
+  "build": {
+    "appId": "kr.barun.saenghwal",
+    "productName": "BarunSaenghwal",
+    "artifactName": "BarunSaenghwal-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "store.js",
+      "package.json",
+      "renderer/**",
+      "shared/**",
+      "node_modules/@mediapipe/tasks-vision/**",
+      "dev/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../models",
+        "to": "models",
+        "filter": [
+          "pose_landmarker_full.task"
+        ]
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/@mediapipe/tasks-vision/wasm/**"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.healthcare-fitness",
+      "icon": "build/icon.png",
+      "identity": "-",
+      "extendInfo": {
+        "NSCameraUsageDescription": "자세를 분석하려고 카메라를 사용해요. 영상은 저장·전송되지 않고 이 컴퓨터 안에서만 분석해요.",
+        "LSUIElement": false,
+        "CFBundleDisplayName": "바른생활"
+      },
+      "hardenedRuntime": false
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "바른생활",
+      "artifactName": "BarunSaenghwal-Setup-${version}.${ext}"
+    }
   }
 }
