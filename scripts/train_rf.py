@@ -73,6 +73,15 @@ def build():
 def bal(y, p):
     return (np.mean(p[y == 0] == 0) + np.mean(p[y == 1] == 1)) / 2
 
+def load_mine():
+    """데모에서 직접 수집한 특징(data/out/mine.csv). 세션 단위로 묶어 검증한다."""
+    f = ROOT / "data/out/mine.csv"
+    if not f.exists(): return None
+    d = np.genfromtxt(f, delimiter=",", skip_header=1, dtype=str)
+    d = np.atleast_2d(d)
+    X = d[:, 3:].astype(float)
+    return X, d[:, 2].astype(int), d[:, 1], np.array(["mine" + s + v for s, v in zip(d[:, 0], d[:, 1])])
+
 if __name__ == "__main__":
     X, y, sp, ds, grp = build()
     print(f"샘플 {len(y)} (나쁨 {y.sum()}, 좋음 {(1-y).sum()})")
@@ -94,4 +103,33 @@ if __name__ == "__main__":
     names = ["CVA", "귀앞", "귀위", "어깨기울기", "귀기울기", "어깨/기준", "얼굴/기준", "어깨/얼굴", "코세로", "코가로", "귀-어깨중심", "귀높이차", "귀vis", "어깨vis", "코vis", "코z", "귀z"]
     top = np.argsort(rf.feature_importances_)[::-1][:6]
     print("중요 특징:", ", ".join(f"{names[i]} {rf.feature_importances_[i]:.2f}" for i in top))
-    joblib.dump(mk().fit(X, y), ROOT / "models/posture_rf.joblib")
+    mine = load_mine()
+    W = np.ones(len(y))
+    front_f = ROOT / "models/posture_rf_front.joblib"
+    if front_f.exists(): front_f.unlink()   # 정면 데이터가 부족하면 옛 정면 모델이 남지 않게 지운다
+    if mine is not None:
+        mX, my, mview, mgrp = mine
+        print(f"\n[내 수집 데이터] {len(my)}행 (나쁨 {my.sum()}), 방향 {dict(zip(*np.unique(mview, return_counts=True)))}, 세션 {len(np.unique(mgrp))}개")
+        MW = 5.0   # 내 측면 데이터 가중치(공개 데이터가 훨씬 많아서 올려준다)
+        fm, sm = mview == "front", mview == "side"
+        # 측면 모델: 공개 데이터 + 내 측면 데이터
+        X, y = np.vstack([X, mX[sm]]), np.r_[y, my[sm]]
+        W = np.r_[W, np.full(sm.sum(), MW)]
+        # 정면 모델: 공개 데이터는 대부분 측면이라 섞지 않고 내 정면 데이터만 쓴다
+        if fm.sum() >= 60 and len(np.unique(my[fm])) == 2:
+            fX, fy, fg = mX[fm], my[fm], mgrp[fm]
+            mkf = lambda: RandomForestClassifier(n_estimators=300, min_samples_leaf=3, class_weight="balanced", random_state=0, n_jobs=-1)
+            sessions = np.unique(fg)
+            if len(sessions) >= 2:   # 세션 단위 검증: 한 세션을 빼고 학습, 뺀 세션으로 평가
+                for s_ in sessions:
+                    te_m = fg == s_
+                    if len(np.unique(fy[te_m])) < 2 or len(np.unique(fy[~te_m])) < 2: continue
+                    mf = mkf().fit(fX[~te_m], fy[~te_m])
+                    print(f"  정면 세션 {s_}: 정면 모델 {bal(fy[te_m], mf.predict(fX[te_m])):.1%} / 측면 모델을 그대로 쓸 때 {bal(fy[te_m], rf.predict(fX[te_m])):.1%}")
+            else:
+                print("  정면 세션이 1개뿐이라 세션 검증은 건너뜀. 시간이나 거리를 바꿔 한 번 더 수집하면 검증할 수 있습니다.")
+            joblib.dump(mkf().fit(fX, fy), front_f)
+            print(f"  정면 모델 저장: {front_f.name} ({fm.sum()}행)")
+        else:
+            print("  정면 데이터가 부족해 정면 모델은 만들지 않음(바른/나쁜 자세 각각 기록, 60행 이상 필요). 데모는 측면 모델로 대신 판정합니다.")
+    joblib.dump(mk().fit(X, y, sample_weight=W), ROOT / "models/posture_rf.joblib")
