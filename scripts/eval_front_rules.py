@@ -31,7 +31,7 @@ def load():
         ms = []
         for i in idx:
             lm = np.ones((33, 4)); lm[:, :2] = X[i]
-            lm[[15, 16], 3] = 0.0   # 손 위치는 상체 라벨과 무관해서 턱 괴기 판정은 끔
+            lm[list(fr.HAND), 3] = 0.0   # 손 위치는 상체 라벨과 무관해서 턱 괴기 판정은 끔(손목·손가락 모두)
             ms.append(fr.metrics(lm, SCALE, SCALE))
         tup = np.flatnonzero(labels == "TUP")
         cal, rest = tup[: len(tup) // 2], np.setdiff1d(np.arange(len(idx)), tup[: len(tup) // 2])
