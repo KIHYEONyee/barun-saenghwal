@@ -5,6 +5,7 @@ document.head.insertAdjacentHTML('beforeend', `<style>${C.CRITTER_CSS}</style>`)
 let D = await B.invoke('get-all');
 let LIVE = D.live;
 const DEV = await B.invoke('dev-info');
+const WEB = D.platform === 'web';   // 웹 버전(webapp/)에서는 메뉴바·클릭 통과 같은 데스크톱 전용 설정을 숨긴다
 const $ = (s, el = document) => el.querySelector(s);
 const app = $('#app');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -332,11 +333,12 @@ function pageSettings(main, tab = 'widget') {
       const sel = s.animal === k;
       return `<button class="animal ${sel ? 'sel' : ''} ${u.owned ? '' : 'locked'}" data-animal="${k}" ${u.owned ? '' : 'disabled'}><div class="pic">${C.critterSVG(k, 'good', { still: !sel })}</div><b>${n}</b><span class="small muted">${sel ? '사용 중' : u.owned ? '보유' : u.text}</span><div class="bar"><i style="width:${(u.owned ? 1 : u.progress) * 100}%"></i></div></button>`;
     }).join('')}</div><h3>표시</h3>
+      ${WEB ? item('작은 위젯 창', '크롬·엣지에서는 다른 앱 위에 항상 떠 있는 작은 창으로 캐릭터를 띄울 수 있어요', `<button id="pip">${'documentPictureInPicture' in window ? '위젯 창 띄우기' : '이 브라우저는 지원 안 함'}</button>`) : `
       ${item('표시 방식', '', seg('display', [['desktop', '데스크톱 위젯'], ['menubar', D.platform === 'darwin' ? '메뉴바' : '트레이'], ['both', '둘 다']]))}
       ${item('위젯 크기', '', seg('widgetSize', [['small', '작게'], ['medium', '보통'], ['large', '크게']]))}
       ${item('클릭 통과', '위젯 뒤의 창을 클릭할 수 있어요. 켜면 위젯을 옮길 수 없어요', tog('clickThrough'))}
       ${item('전체 화면·화상회의 중 숨기기', '초안: 메뉴바의 "회의 중"으로 직접 멈춰요. 자동 감지는 다음 버전', tog('hideInMeetings'))}
-      ${item('모든 데스크톱에서 보이기', '항상 위에 표시돼요', tog('allSpaces'))}`;
+      ${item('모든 데스크톱에서 보이기', '항상 위에 표시돼요', tog('allSpaces'))}`}`;
   } else if (tab === 'detect') {
     const devs = LIVE.devices || [];
     pane = `${item('모드', '', seg('mode', [['basic', '기본'], ['webcam', '웹캠'], ['precise', '정밀']]))}
@@ -359,7 +361,7 @@ function pageSettings(main, tab = 'widget') {
     pane = `<div class="card" style="background:var(--green-soft);border:0"><b>영상은 저장·전송되지 않아요</b><div class="small" style="margin-top:6px;line-height:1.6">카메라 영상은 이 컴퓨터 안에서만 분석하고, 각도와 상태 같은 숫자만 기록해요. 일시정지하면 카메라도 꺼져요.</div></div>
       ${item('카메라 미리보기', '앱이 무엇을 보는지 확인해요', '<button id="pv">미리보기 켜기</button>')}
       <div class="cam" id="pv-cam" style="height:300px;display:none;margin:10px 0"><span class="tag">미리보기 (좌우 반전)</span></div>
-      ${item('기록 위치', '이 컴퓨터에만 저장돼요', `<span class="small muted">앱 데이터 폴더 · barun-data.json</span>`)}`;
+      ${item('기록 위치', WEB ? '이 브라우저에만 저장돼요. 브라우저 데이터를 지우면 기록도 지워져요' : '이 컴퓨터에만 저장돼요', `<span class="small muted">${WEB ? '브라우저 저장소' : '앱 데이터 폴더 · barun-data.json'}</span>`)}`;
   }
   main.innerHTML = `<h1>설정</h1><div class="set"><nav class="tabs">${tabs.map(([k, n]) => `<a href="#settings/${k}" class="${k === tab ? 'on' : ''}">${n}</a>`).join('')}</nav><section class="pane">${pane}</section></div>`;
   main.querySelectorAll('[data-k]').forEach((b) => (b.onclick = () => set({ [b.dataset.k]: b.dataset.v })));
@@ -374,6 +376,7 @@ function pageSettings(main, tab = 'widget') {
   on('#sch', 'onclick', () => set({ schedule: { ...(s.schedule || {}), enabled: !(s.schedule || {}).enabled } }));
   on('#sch-s', 'onchange', (e) => set({ schedule: { ...(s.schedule || {}), start: e.target.value } }));
   on('#sch-e', 'onchange', (e) => set({ schedule: { ...(s.schedule || {}), end: e.target.value } }));
+  on('#pip', 'onclick', () => B.send('web-pip'));
   on('#pv', 'onclick', () => { const c = $('#pv-cam', main); c.style.display = 'block'; mountPreview(c); });
   setPage({});
 }
@@ -461,8 +464,8 @@ function pageOnboardDone() {
     app.innerHTML = `<div class="onb"><div><div class="step">3 / 3 단계</div><h1 style="font-size:34px;margin-top:6px">함께할 친구를 골라 주세요</h1><div class="muted" style="margin-top:6px">화면 구석에서 내 자세를 따라 해요. 바르게 앉으면 신나게, 자세가 무너지면 같이 무너져요.</div></div>
       <div class="animals" style="grid-template-columns:repeat(3,1fr);max-width:620px">${C.ANIMALS.slice(0, 3).map(([k, n]) => `<button class="animal ${animal === k ? 'sel' : ''}" data-a="${k}"><div class="pic" style="width:110px;height:110px">${C.critterSVG(k, 'good')}</div><b>${n}</b></button>`).join('')}</div>
       <div class="muted small">펭귄·강아지는 바른 자세를 이어가면 열려요.</div>
-      <div class="row"><span>표시 방식</span><div class="seg">${[['desktop', '데스크톱 위젯'], ['menubar', D.platform === 'darwin' ? '메뉴바' : '트레이'], ['both', '둘 다']].map(([v, t]) => `<button data-d="${v}" class="${display === v ? 'on' : ''}">${t}</button>`).join('')}</div></div>
-      <div class="onb-foot"><span class="muted">위젯은 잡고 끌어서 원하는 곳에 둘 수 있어요. 클릭하면 메뉴가 열려요.</span><button class="primary" id="go" style="padding:12px 26px">시작하기</button></div></div>`;
+      ${WEB ? '' : `<div class="row"><span>표시 방식</span><div class="seg">${[['desktop', '데스크톱 위젯'], ['menubar', D.platform === 'darwin' ? '메뉴바' : '트레이'], ['both', '둘 다']].map(([v, t]) => `<button data-d="${v}" class="${display === v ? 'on' : ''}">${t}</button>`).join('')}</div></div>`}
+      <div class="onb-foot"><span class="muted">${WEB ? '캐릭터는 화면 오른쪽 아래에 있어요. 크롬·엣지에서는 다른 앱 위에 띄울 수도 있어요.' : '위젯은 잡고 끌어서 원하는 곳에 둘 수 있어요. 클릭하면 메뉴가 열려요.'}</span><button class="primary" id="go" style="padding:12px 26px">시작하기</button></div></div>`;
     app.querySelectorAll('[data-a]').forEach((b) => (b.onclick = () => { animal = b.dataset.a; draw(); }));
     app.querySelectorAll('[data-d]').forEach((b) => (b.onclick = () => { display = b.dataset.d; draw(); }));
     $('#go').onclick = async () => { D.settings = await B.invoke('set-settings', { animal, display }); localStorage.setItem('onboarded', '1'); B.send('onboarding-done'); location.hash = 'home'; };

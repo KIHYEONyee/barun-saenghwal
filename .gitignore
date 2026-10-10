@@ -4,3 +4,4 @@ models/*.task
 __pycache__/
 data/*
 !data/.gitkeep
+.gstack/

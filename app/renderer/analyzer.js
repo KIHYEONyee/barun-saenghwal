@@ -1,6 +1,12 @@
 // 숨은 분석 창: 웹캠 → MediaPipe 관절 → 판정 규칙(shared/rules.js) → 본체로 결과 전송(초당 8회)
 // 영상은 어디에도 저장·전송하지 않는다. 본체로 보내는 건 판정 결과 숫자뿐.
-import { FilesetResolver, PoseLandmarker } from 'app://bundle/node_modules/@mediapipe/tasks-vision/vision_bundle.mjs';
+// MediaPipe 위치: 앱은 app:// 로 앱 안의 파일, 웹은 window.BARUN_PATHS(CDN)
+const PATHS = window.BARUN_PATHS || {
+  vision: 'app://bundle/node_modules/@mediapipe/tasks-vision/vision_bundle.mjs',
+  wasm: 'app://bundle/node_modules/@mediapipe/tasks-vision/wasm',
+  model: 'app://models/pose_landmarker_full.task',
+};
+const { FilesetResolver, PoseLandmarker } = await import(PATHS.vision);
 
 const R = window.Rules;
 const FPS = 8;
@@ -58,10 +64,23 @@ async function startCamera() {
 }
 function stopCamera() { if (stream) stream.getTracks().forEach((t) => t.stop()); stream = null; }
 
-async function createLandmarker() {
-  const fileset = await FilesetResolver.forVisionTasks('app://bundle/node_modules/@mediapipe/tasks-vision/wasm');
-  const opts = (delegate) => ({ baseOptions: { modelAssetPath: 'app://models/pose_landmarker_full.task', delegate }, runningMode: 'VIDEO', numPoses: 1 });
-  try { return await PoseLandmarker.createFromOptions(fileset, opts('GPU')); } catch { return PoseLandmarker.createFromOptions(fileset, opts('CPU')); }
+let delegate = 'GPU', fileset = null, switching = false;
+async function createLandmarker(want = 'GPU') {
+  fileset ||= await FilesetResolver.forVisionTasks(PATHS.wasm);
+  const opts = (d) => ({ baseOptions: { modelAssetPath: PATHS.model, delegate: d }, runningMode: 'VIDEO', numPoses: 1 });
+  if (want === 'GPU') { try { delegate = 'GPU'; return await PoseLandmarker.createFromOptions(fileset, opts('GPU')); } catch { /* 아래 CPU로 */ } }
+  delegate = 'CPU';
+  return PoseLandmarker.createFromOptions(fileset, opts('CPU'));
+}
+// GPU(WebGL)를 쓸 수 없는 컴퓨터에서는 만들기는 성공해도 분석할 때 실패한다 → CPU로 다시 만든다
+async function fallbackToCpu(err) {
+  if (switching || delegate === 'CPU') return;
+  switching = true;
+  console.warn('GPU 분석 실패, CPU로 전환:', err);
+  try { if (landmarker) landmarker.close(); } catch { /* 무시 */ }
+  landmarker = null;
+  landmarker = await createLandmarker('CPU');
+  switching = false;
 }
 
 function frameSource() {
@@ -80,16 +99,30 @@ function measureBrightness(src) {
   for (let i = 0; i < d.length; i += 4) s += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
   return s / (d.length / 4);
 }
-function post(p) { window.barun.send('posture', { t: Date.now(), mode: settings.mode, device: device && device.label, ...p }); lastPost = Date.now(); }
+function post(p) { window.barun.send('posture', { t: Date.now(), mode: settings.mode, device: device && device.label, ...p }); lastPost = Date.now(); if (window.__barunAnalyzer) window.__barunAnalyzer.posts++; }
 
+const diag = (window.__barunAnalyzer = { ticks: 0, detects: 0, lastDetectMs: 0, posts: 0, error: null, get delegate() { return delegate; } });   // 진단용(느림·오류 확인)
+let lastTickAt = 0;
 function tick() {
+  // 분석이 느린 컴퓨터에서는 타이머 신호가 밀려 쌓인다. 직전 분석 뒤 충분히 지났을 때만 분석해 화면이 버벅이지 않게 한다.
+  // 분석 1회가 오래 걸리면 간격을 그 2배 이상으로 늘려, 화면 그리기에 쓸 시간을 남긴다(초당 8회 → 느린 PC는 자동으로 줄어듦)
+  const t = performance.now();
+  if (t - lastTickAt < Math.max(1000 / FPS, diag.lastDetectMs * 2) * 0.8) return;
+  lastTickAt = t;
+  diag.ticks++;
+  try { tickInner(); } catch (e) { diag.error = String(e && e.stack || e); }
+}
+function tickInner() {
   if (!landmarker || (!fakeImg && video.readyState < 2)) return;
   if (paused) { if (Date.now() - lastPost > 1000) post({ present: false, paused: true, level: 'paused', issues: [] }); return; }
   const { src, w, h } = frameSource();
   if (!w || !h) return;
   const now = performance.now();
   if (Date.now() - lastLum > 1000) { brightness = measureBrightness(src); lastLum = Date.now(); }
-  const res = landmarker.detectForVideo(src, now);
+  const t0 = performance.now();
+  let res;
+  try { res = landmarker.detectForVideo(src, now); } catch (e) { if (delegate === 'GPU') { fallbackToCpu(e); return; } throw e; }
+  diag.detects++; diag.lastDetectMs = Math.round(performance.now() - t0);
   const raw = res.landmarks && res.landmarks[0];
   // 거울 화면 기준으로 맞춘다(화면 오른쪽 = 사용자 오른쪽). 파이썬 데모는 영상을 뒤집은 뒤 검출한다.
   const lm = raw ? raw.map((p) => [1 - p.x, p.y, p.z, p.visibility ?? 1]) : null;
@@ -176,4 +209,8 @@ await startCamera();
 base = loadBaseline(cfg.baseline);
 landmarker = await createLandmarker();
 if (paused && !fakeImg) stopCamera();
-setInterval(tick, 1000 / FPS);
+// 타이머는 워커에서 돌린다: 브라우저는 뒤에 있는 탭의 setInterval 을 1초 이상으로 늦추지만 워커 타이머는 덜 늦춘다
+try {
+  const worker = new Worker(URL.createObjectURL(new Blob([`setInterval(() => postMessage(0), ${Math.round(1000 / FPS)})`], { type: 'text/javascript' })));
+  worker.onmessage = tick;
+} catch { setInterval(tick, 1000 / FPS); }

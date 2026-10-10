@@ -8,6 +8,7 @@ const { pathToFileURL } = require('url');
 const { Store, today } = require('./store');
 const Rules = require('./shared/rules');
 const Stretches = require('./shared/stretches');
+const Core = require('./shared/core');
 
 const DEV = {
   fakeImage: process.env.JASAI_FAKE_IMAGE || '',      // 카메라 대신 쓸 사진(시험용)
@@ -30,34 +31,16 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: t
 let store;
 const win = { main: null, analyzer: null, widget: null, dim: null, lock: null, selfcheck: null };
 let tray = null, trayFrames = {}, trayAnim = null;
-const live = {
-  posture: null,          // 분석기가 보낸 마지막 판정
-  widgetPose: 'good', widgetTint: 'auto', widgetDir: 0,
-  snoozeUntil: 0, meeting: false,
-  sitStart: null, lastSeen: 0, restDue: false, restNotified: false,
-  episode: null,          // { start, key, notified, maxDur }
-  praiseUntil: 0, lockedAt: 0, devices: [],
-  basicUseStart: null, lastSelfcheck: 0,
-};
+let core;   // shared/core.js: 판정 후처리(앱·웹 공용). 시작할 때 store 와 함께 만든다
+const live = new Proxy({}, { get: (t, k) => core.live[k], set: (t, k, v) => { core.live[k] = v; return true; } });   // dev/shots.js 등에서 쓰던 live 그대로
 
 // ---------- 공통 ----------
 const send = (w, ch, data) => { if (w && typeof w.isDestroyed === 'function' && !w.isDestroyed()) w.webContents.send(ch, data); };
 const broadcast = (ch, data) => Object.values(win).forEach((w) => send(w, ch, data));
 const pageURL = (file, hash = '') => `app://bundle/renderer/${file}${hash ? '#' + hash : ''}`;
-const cautionSec = () => ({ fast: 2, normal: 3, relaxed: 5 }[store.settings.sensitivity] || 3);
-const paused = () => Date.now() < live.snoozeUntil || live.meeting || outOfSchedule();
-function outOfSchedule() {
-  const s = store.settings.schedule;
-  if (!s || !s.enabled) return false;
-  const now = new Date(); const m = now.getHours() * 60 + now.getMinutes();
-  const [sh, sm] = s.start.split(':').map(Number), [eh, em] = s.end.split(':').map(Number);
-  return m < sh * 60 + sm || m >= eh * 60 + em;
-}
-function todayScore() {
-  const d = store.day();
-  const tot = d.sec.good + d.sec.caution + d.sec.warning;
-  return tot > 0 ? Math.round((d.sec.good / tot) * 100) : null;
-}
+const cautionSec = () => core.cautionSec();
+const paused = () => core.paused();
+const todayScore = () => core.todayScore();
 function webPrefs(extra = {}) {
   return { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, ...(DEV.shots ? { backgroundThrottling: false } : {}), ...extra };
 }
@@ -123,23 +106,15 @@ function setDim(opacity) {
 function openLock(issue) {
   if (win.lock) return;
   const b = primaryBounds();
-  live.lockedAt = Date.now();
-  store.count('locks');
+  core.lockOpened(issue);
   win.lock = new BrowserWindow({ ...b, frame: false, skipTaskbar: true, resizable: false, movable: false, minimizable: false, show: false, backgroundColor: '#1c1a17', webPreferences: webPrefs() });
   win.lock.setAlwaysOnTop(true, 'screen-saver');
   win.lock.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   win.lock.loadURL(pageURL('lock.html'));
   win.lock.once('ready-to-show', () => { if (SHOW) { win.lock.show(); win.lock.focus(); } send(win.lock, 'lock-info', { issue, mode: store.settings.mode, emergencyLeft: store.emergencyLeft(), minutes: Math.max(1, Math.round((issue && issue.dur || 0) / 60)) }); });
   win.lock.on('closed', () => { win.lock = null; });
-  setDim(0);
 }
-function closeLock(reason) {
-  if (!win.lock) return;
-  store.count('lockReleaseSec', (Date.now() - live.lockedAt) / 1000);
-  win.lock.destroy(); win.lock = null;
-  live.episode = null;
-  if (reason === 'fixed') live.praiseUntil = Date.now() + 3000;
-}
+function closeLock() { if (win.lock) { win.lock.destroy(); win.lock = null; } }
 
 function openSelfcheck() {
   if (win.selfcheck) return;
@@ -148,7 +123,7 @@ function openSelfcheck() {
   win.selfcheck = new BrowserWindow({ width: W, height: H, x: wa.x + wa.width - W - 24, y: wa.y + wa.height - H - 24, frame: false, transparent: true, resizable: false, skipTaskbar: true, alwaysOnTop: true, show: false, backgroundColor: '#00000000', webPreferences: webPrefs() });
   win.selfcheck.setAlwaysOnTop(true, 'floating');
   win.selfcheck.loadURL(pageURL('selfcheck.html'));
-  win.selfcheck.once('ready-to-show', () => { if (SHOW) win.selfcheck.showInactive(); send(win.selfcheck, 'selfcheck-info', { minutes: Math.round((Date.now() - (live.basicUseStart || Date.now())) / 60000), animal: store.settings.animal }); });
+  win.selfcheck.once('ready-to-show', () => { if (SHOW) win.selfcheck.showInactive(); send(win.selfcheck, 'selfcheck-info', { minutes: core.basicMinutes(), animal: store.settings.animal }); });
   win.selfcheck.on('closed', () => { win.selfcheck = null; });
 }
 
@@ -171,7 +146,7 @@ function trayMenu() {
     { type: 'separator' },
     { label: `스트레칭 추천 · ${rec.name}`, click: () => createMain(`stretch/${rec.id}`) },
     { label: Date.now() < live.snoozeUntil ? '일시정지 해제' : '30분 일시정지', click: () => toggleSnooze() },
-    { label: live.meeting ? '회의 끝남 (다시 분석)' : '회의 중 (분석 멈춤)', click: () => { live.meeting = !live.meeting; applyPause(); } },
+    { label: live.meeting ? '회의 끝남 (다시 분석)' : '회의 중 (분석 멈춤)', click: () => core.setMeeting(!live.meeting) },
     { label: win.widget ? '위젯 숨기기' : '위젯 보이기', click: () => { if (win.widget) { win.widget.destroy(); win.widget = null; } else { createWidget(); } } },
     { type: 'separator' },
     { label: '리포트 열기', click: () => createMain('report') },
@@ -199,86 +174,12 @@ function updateTray() {
   if (speed && frames.length > 1) trayAnim = setInterval(() => { i = (i + 1) % frames.length; if (tray) tray.setImage(frames[i]); }, speed);
 }
 
-// ---------- 일시정지 ----------
-function toggleSnooze(min = 30) {
-  live.snoozeUntil = Date.now() < live.snoozeUntil ? 0 : Date.now() + min * 60000;
-  applyPause();
-}
-function applyPause() {
-  send(win.analyzer, 'cmd', { type: paused() ? 'pause' : 'resume' });
-  if (paused()) { setDim(0); live.episode = null; }
-  updateWidget(); updateTray(); pushLive();
-}
-
-// ---------- 판정 수신 → 위젯·개입·기록 ----------
-const POSE_OF = { turtle: 'turtle', close: 'turtle', head_down: 'slouch', slouch: 'slouch', roll: 'tilt', tilt: 'tilt', lean: 'tilt', shrug: 'shrug', chin: 'chin' };
-let lastTick = Date.now();
-function onPosture(p) {
-  const now = Date.now();
-  const dt = Math.min(2, (now - lastTick) / 1000); lastTick = now;
-  live.posture = p;
-  if (p.calibrated) live.lastCalibrated = { ...p.calibrated, t: now };   // 한 번만 오는 결과라 화면이 놓치지 않게 보관
-  if (p.calibrating) { pushLive(); return; }
-
-  // 기록
-  const state = paused() ? 'paused' : !p.present ? 'away' : p.level === 'warning' ? 'warning' : p.level === 'caution' ? 'caution' : p.level === 'good' ? 'good' : null;
-  if (state && dt > 0) store.record(state, dt, p.issues[0] && p.issues[0].key);
-
-  // 오래 앉음: 화면에 계속 있으면 시간을 재고, 2분 이상 자리를 비우면 초기화
-  if (p.present) {
-    live.lastSeen = now;
-    if (!live.sitStart) live.sitStart = now;
-  } else if (live.sitStart && now - live.lastSeen > 120000) {
-    live.sitStart = null; live.restDue = false; live.restNotified = false;
-  }
-  const sitMin = live.sitStart ? (now - live.sitStart) / 60000 : 0;
-  if (sitMin >= store.settings.sitReminderMin && !live.restDue) {
-    live.restDue = true;
-    if (!live.restNotified) { live.restNotified = true; notify(`${Math.round(sitMin)}분째 앉아 있어요`, '잠깐 일어나거나 스트레칭 해볼까요?', 'stretch'); store.count('stretchRec'); }
-  }
-
-  // 단계적 개입
-  const top = p.issues[0];
-  if (!paused() && p.present && top) {
-    if (!live.episode) live.episode = { start: now, key: top.key, notified: false, maxDur: 0 };
-    const ep = live.episode;
-    ep.maxDur = Math.max(ep.maxDur, top.dur);
-    if (top.dur >= Rules.WARN_SEC && !ep.notified && store.settings.notify) {
-      ep.notified = true; store.count('notifies'); store.count('stretchRec');
-      notify(top.ko, `${guidance(top.key)} · ${Math.round(top.dur)}초째`, 'home');
-    }
-    if (store.settings.dimEnabled && top.dur >= store.settings.dimAfterSec) {
-      setDim(Math.min(0.55, ((top.dur - store.settings.dimAfterSec) / 60) * 0.55 + 0.08));
-    }
-    const maxSev = Math.max(...p.issues.map((i) => i.sev || 0));
-    if (store.settings.focusMode && top.dur >= store.settings.lockAfterSec && maxSev >= store.settings.lockMinSev) openLock(top);
-  } else {
-    if (live.episode && live.episode.maxDur >= Rules.WARN_SEC && p.present) live.praiseUntil = now + 2500;   // 자세 고침 칭찬
-    live.episode = null;
-    setDim(0);
-  }
-  updateWidget(); pushLive();
-}
-function guidance(key) {
-  return {
-    turtle: '턱을 살짝 당기고 화면에서 한 뼘 떨어져 보세요', close: '화면에서 조금 떨어져 앉아 보세요', head_down: '화면을 눈높이로 올리고 고개를 들어 보세요',
-    roll: '고개를 똑바로 세워 보세요', tilt: '양 어깨 높이를 맞춰 보세요', shrug: '어깨에 힘을 빼고 툭 떨어뜨려 보세요',
-    lean: '엉덩이를 의자 깊숙이 넣고 가운데로 앉아 보세요', chin: '손을 내리고 턱을 당겨 보세요', slouch: '허리를 펴고 등받이에 기대 보세요',
-  }[key] || '자세를 바로 해 보세요';
-}
-function updateWidget() {
-  const p = live.posture;
-  let pose = 'good', tint = 'auto', dir = 0;
-  if (paused() || (p && !p.present && store.settings.mode !== 'basic')) pose = 'away';
-  else if (Date.now() < live.praiseUntil) pose = 'praise';
-  else if (p && p.issues && p.issues[0]) {
-    const top = p.issues[0];
-    pose = POSE_OF[top.key] || 'tilt'; dir = top.dir || 0;
-    tint = p.level === 'warning' ? 'warning' : 'caution';
-  } else if (live.restDue) pose = 'rest';
-  else if (live.basicPose && store.settings.mode === 'basic') { pose = live.basicPose.pose; tint = live.basicPose.tint; }
-  live.widgetPose = pose; live.widgetTint = tint; live.widgetDir = dir;
-  send(win.widget, 'widget', { pose, tint, dir, animal: store.settings.animal, analyzing: !paused() && store.settings.mode !== 'basic', size: WIDGET_PX[store.settings.widgetSize] || 120 });
+// ---------- 판정 후처리는 shared/core.js. 여기서는 앱 전용 처리(창·메뉴바·알림)만 ----------
+const toggleSnooze = (min) => core.toggleSnooze(min);
+const onPosture = (p) => core.onPosture(p);
+const updateWidget = () => core.updateWidget();
+function sendWidget(state) {
+  send(win.widget, 'widget', { ...state, size: WIDGET_PX[store.settings.widgetSize] || 120 });
   updateTrayThrottled();
 }
 let trayTimer = null, lastTrayState = '';
@@ -288,38 +189,30 @@ function updateTrayThrottled() {
   trayTimer = setTimeout(() => { trayTimer = null; lastTrayState = trayState() + todayScore(); updateTray(); }, 500);
 }
 function notify(title, body, page) {
-  if (paused()) return;
   if (DEV.shots) { live.devNotifications = [...(live.devNotifications || []), { title, body }]; return; }
   if (!Notification.isSupported()) return;
   const n = new Notification({ title: `바른생활 · ${title}`, body, silent: false });
   n.on('click', () => createMain(page));
   n.show();
 }
-function liveState() {
-  return {
-    posture: live.posture, widgetPose: live.widgetPose, widgetTint: live.widgetTint, widgetDir: live.widgetDir,
-    paused: paused(), snoozeUntil: live.snoozeUntil, meeting: live.meeting, restDue: live.restDue,
-    sitMin: live.sitStart ? (Date.now() - live.sitStart) / 60000 : 0, score: todayScore(), devices: live.devices, lastCalibrated: live.lastCalibrated || null,
-  };
-}
+const liveState = () => core.liveState();
 let liveTimer = null;
 function pushLive() {
   if (liveTimer) return;
   liveTimer = setTimeout(() => { liveTimer = null; const s = liveState(); send(win.main, 'live', s); send(win.lock, 'live', s); }, 200);
 }
+function createCore() {
+  core = Core.createCore({
+    store, Rules, Stretches,
+    hooks: {
+      notify, setDim, openLock, openSelfcheck, widgetChanged: sendWidget, liveChanged: pushLive,
+      analyzerCmd: (cmd) => send(win.analyzer, 'cmd', cmd),
+    },
+  });
+}
 
 // ---------- 기본 모드(카메라 끔): 키보드·마우스 연속 사용 → 셀프 체크 S12 ----------
-setInterval(() => {
-  if (!store || store.settings.mode !== 'basic' || paused()) return;
-  const idle = powerMonitor.getSystemIdleTime();
-  const now = Date.now();
-  if (idle < 60) { if (!live.basicUseStart) live.basicUseStart = now; }
-  else if (idle > 180) { live.basicUseStart = null; live.basicPose = null; }
-  const useMin = live.basicUseStart ? (now - live.basicUseStart) / 60000 : 0;
-  if (useMin >= store.settings.sitReminderMin && now - live.lastSelfcheck > store.settings.sitReminderMin * 60000) {
-    live.lastSelfcheck = now; openSelfcheck();
-  }
-}, 5000);
+setInterval(() => { if (core) core.basicTick(powerMonitor.getSystemIdleTime()); }, 5000);
 
 // ---------- IPC ----------
 function registerIpc() {
@@ -338,7 +231,7 @@ function registerIpc() {
       if (s.display === 'menubar') { if (win.widget) { win.widget.destroy(); win.widget = null; } } else rebuildWidget();
       if (s.display === 'desktop') destroyTray(); else createTray();
     }
-    if ('schedule' in patch) applyPause();
+    if ('schedule' in patch) core.applyPause();
     send(win.analyzer, 'cmd', { type: 'settings', settings: s, cautionSec: cautionSec() });
     updateWidget();
     return s;
@@ -349,8 +242,8 @@ function registerIpc() {
   ipcMain.on('cancel-calibrate', () => send(win.analyzer, 'cmd', { type: 'cancel-calibrate' }));
   ipcMain.on('onboarding-done', () => { createWidget(); createTray(); });
   ipcMain.on('snooze', (e, min) => toggleSnooze(min || 30));
-  ipcMain.on('report-good', () => { store.count('falseReports'); send(win.analyzer, 'cmd', { type: 'report-good' }); live.episode = null; setDim(0); });
-  ipcMain.on('stretch-done', (e, id) => { store.count('stretchDone'); live.restDue = false; live.sitStart = Date.now(); updateWidget(); });
+  ipcMain.on('report-good', () => core.reportGood());
+  ipcMain.on('stretch-done', () => core.stretchDone());
   ipcMain.on('stretch-rec', () => store.count('stretchRec'));
   ipcMain.on('open-main', (e, hash) => createMain(hash));
   ipcMain.on('widget-move', (e, { x, y }) => {
@@ -372,7 +265,7 @@ function registerIpc() {
       { type: 'separator' },
       { label: `${rec.name} 스트레칭   ${Stretches.duration(rec)}초`, click: () => createMain(`stretch/${rec.id}`) },
       { label: Date.now() < live.snoozeUntil ? '일시정지 해제' : '30분 끄기', click: () => toggleSnooze() },
-      { label: '지금 바른 자세인데요', enabled: !!(live.posture && live.posture.issues && live.posture.issues.length), click: () => { store.count('falseReports'); send(win.analyzer, 'cmd', { type: 'report-good' }); } },
+      { label: '지금 바른 자세인데요', enabled: !!(live.posture && live.posture.issues && live.posture.issues.length), click: () => core.reportGood() },
       { type: 'separator' },
       { label: '바른생활 열기', click: () => createMain('home') },
     ]).popup({ window: win.widget });
@@ -382,22 +275,8 @@ function registerIpc() {
     for (const [state, list] of Object.entries(frames)) trayFrames[state] = list.map((d) => nativeImage.createFromBuffer(Buffer.from(d.split(',')[1], 'base64'), { scaleFactor: 2 }));
     lastTrayState = ''; updateTray();
   });
-  ipcMain.on('lock-release', (e, how) => {
-    if (how === 'emergency') { if (store.emergencyLeft() > 0) { store.useEmergency(); closeLock('emergency'); } }
-    else if (how === 'report') { store.count('falseReports'); send(win.analyzer, 'cmd', { type: 'report-good' }); closeLock('report'); }
-    else closeLock('fixed');
-  });
-  ipcMain.on('selfcheck-answer', (e, ans) => {
-    const d = store.day(); d.selfchecks.push({ t: Date.now(), answer: ans }); store.save();
-    // 기본 모드는 답변을 같은 리포트로 집계: 답한 자세를 직전 10분 동안의 상태로 기록(근사)
-    const map = { good: ['good', null], turtle: ['warning', 'turtle'], slouch: ['warning', 'head_down'], tilt: ['caution', 'tilt'] };
-    const [st, key] = map[ans] || ['good', null];
-    store.record(st, 600, key);
-    live.basicPose = ans === 'good' ? null : { pose: POSE_OF[key] || 'tilt', tint: st === 'warning' ? 'warning' : 'caution' };
-    if (ans !== 'good') notify('자세를 바로 해 볼까요?', guidance(key), `stretch/${Stretches.recommend({ [key]: 1 }, 1)[0].id}`);
-    updateWidget();
-    if (win.selfcheck) win.selfcheck.destroy();
-  });
+  ipcMain.on('lock-release', (e, how) => { if (core.lockRelease(how)) closeLock(); });
+  ipcMain.on('selfcheck-answer', (e, ans) => { core.selfcheckAnswer(ans); if (win.selfcheck) win.selfcheck.destroy(); });
   ipcMain.on('selfcheck-close', () => { if (win.selfcheck) win.selfcheck.destroy(); });
   ipcMain.on('dev-open-selfcheck', () => openSelfcheck());
   ipcMain.on('dev-open-lock', () => openLock((live.posture && live.posture.issues[0]) || { key: 'turtle', ko: '목이 앞으로 나와 있어요', dur: 360 }));
@@ -423,6 +302,7 @@ app.whenReady().then(async () => {
 
   trace('권한 처리');
   store = new Store(app.getPath('userData'));
+  createCore();
   trace('store');
   if (DEV.seed) require('./dev/seed')(store);
   registerIpc();

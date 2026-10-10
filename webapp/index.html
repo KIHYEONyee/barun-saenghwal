@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>바른생활</title>
+<meta name="description" content="웹캠으로 자세를 분석하고, 귀여운 동물이 내 자세를 따라 하는 AI 자세 코치. 영상은 저장·전송되지 않아요.">
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="renderer/style.css">
+<link rel="stylesheet" href="renderer/app.css">
+<link rel="stylesheet" href="web.css">
+</head>
+<body>
+<div id="app"></div>
+<!-- 분석기(renderer/analyzer.js)가 쓰는 요소. 화면에는 보이지 않는다 -->
+<div id="analyzer" aria-hidden="true"><video id="video" playsinline muted></video><canvas id="src"></canvas><canvas id="lum" width="64" height="36"></canvas></div>
+<script src="shared/rules.js"></script>
+<script src="shared/stretches.js"></script>
+<script src="shared/storecore.js"></script>
+<script src="shared/core.js"></script>
+<script src="renderer/critter.js"></script>
+<script src="bridge.js"></script>
+<script type="module" src="renderer/app.js"></script>
+</body>
+</html>
