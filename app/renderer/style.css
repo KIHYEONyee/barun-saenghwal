@@ -1,0 +1,57 @@
+/* 바른생활 공통 스타일. 색·형태는 기현 디자인(design/barun-ui-standalone.html)을 따른다 */
+:root {
+  --paper: oklch(0.975 0.004 85);
+  --side: oklch(0.955 0.006 85);
+  --card: #fff;
+  --ink: oklch(0.22 0.02 60);
+  --muted: oklch(0.5 0.012 85);
+  --line: oklch(0.9 0.006 85);
+  --green: oklch(0.48 0.1 160);
+  --green-2: oklch(0.62 0.13 155);
+  --green-soft: oklch(0.95 0.04 160);
+  --caution: oklch(0.78 0.14 75);
+  --caution-soft: oklch(0.96 0.05 90);
+  --warn: oklch(0.6 0.19 28);
+  --warn-soft: oklch(0.95 0.035 25);
+  --away: oklch(0.86 0.006 85);
+  --dark: oklch(0.2 0.01 70);
+  --radius: 14px;
+  font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  color: var(--ink);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); min-height: 100vh; }
+button { font: inherit; color: inherit; cursor: pointer; border: 1px solid var(--line); background: #fff; border-radius: 10px; padding: 9px 16px; font-weight: 600; }
+button:hover { border-color: oklch(0.8 0.01 85); }
+button.primary { background: var(--green); border-color: var(--green); color: #fff; }
+button.dark { background: var(--dark); border-color: var(--dark); color: #fff; }
+button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+button:disabled { opacity: .45; cursor: default; }
+h1 { font-size: 28px; letter-spacing: -0.02em; }
+h2 { font-size: 22px; letter-spacing: -0.02em; }
+h3 { font-size: 15px; }
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px 24px; }
+.row { display: flex; gap: 12px; align-items: center; }
+.grid { display: grid; gap: 16px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--green-soft); color: var(--green); font-size: 12.5px; font-weight: 600; }
+.chip.gray { background: oklch(0.95 0.004 85); color: var(--muted); }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--green-2); }
+.dot.caution { background: var(--caution); } .dot.warning { background: var(--warn); } .dot.away { background: var(--away); }
+.seg { display: inline-flex; background: oklch(0.95 0.004 85); border-radius: 10px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: transparent; padding: 6px 12px; font-weight: 500; border-radius: 8px; color: var(--muted); }
+.seg button.on { background: #fff; color: var(--ink); font-weight: 700; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.toggle { width: 42px; height: 24px; border-radius: 999px; background: oklch(0.88 0.005 85); position: relative; border: 0; padding: 0; flex: none; }
+.toggle::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left .2s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.toggle.on { background: var(--green); } .toggle.on::after { left: 21px; }
+.bar { height: 8px; border-radius: 999px; background: oklch(0.93 0.005 85); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 999px; background: var(--green); }
+.cam { position: relative; background: repeating-linear-gradient(135deg, oklch(0.25 0.006 70) 0 10px, oklch(0.22 0.006 70) 10px 20px); border-radius: 16px; overflow: hidden; color: #fff; }
+.cam video, .cam img.fake { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; }
+.cam canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.cam .tag { position: absolute; left: 18px; top: 16px; font-size: 12px; opacity: .8; }
+.cam .badge { position: absolute; right: 16px; top: 14px; background: rgba(0,0,0,.6); padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 700; }
+.cam .toast { position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%); background: rgba(0,0,0,.75); padding: 12px 20px; border-radius: 12px; font-size: 17px; font-weight: 700; white-space: nowrap; }

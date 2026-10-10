@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>바른생활 화면 흐림</title>
+<style>html,body{margin:0;height:100%;background:transparent;overflow:hidden}#d{position:fixed;inset:0;background:rgb(28,26,23);opacity:0;transition:opacity 1.2s}</style>
+</head><body><div id="d"></div>
+<script>
+// S10 ③ 화면 흐려짐: 나쁜 자세가 계속되면 서서히 어두워지고, 고치면 바로 사라진다(창 자체가 닫힘)
+window.barun.on('dim', (o) => { document.getElementById('d').style.opacity = o; });
+</script></body></html>

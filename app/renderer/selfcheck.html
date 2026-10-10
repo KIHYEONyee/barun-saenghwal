@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>바른생활 셀프 체크</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  html, body { background: transparent; min-height: 0; }
+  .box { position: absolute; inset: 10px; background: #fff; border-radius: 18px; box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 20px 22px; display: grid; gap: 12px; align-content: start; }
+  .head { display: flex; justify-content: space-between; align-items: start; }
+  .opts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .opt { border: 1px solid var(--line); border-radius: 12px; padding: 8px 8px 10px; display: grid; gap: 6px; justify-items: center; font-weight: 600; font-size: 13.5px; background: #fff; }
+  .opt .pic { width: 100%; aspect-ratio: 1.15; border-radius: 9px; background: oklch(0.97 0.004 85); display: flex; align-items: center; justify-content: center; }
+  .opt .pic > div { width: 80px; height: 80px; }
+  .opt:hover { border-color: var(--green); }
+</style></head>
+<body><div class="box">
+  <div class="head"><div><h3 style="font-size:18px">지금 내 자세와 비슷한 건?</h3><div class="small muted" id="sub"></div></div><button class="ghost" id="later">나중에</button></div>
+  <div class="opts" id="opts"></div>
+</div>
+<script src="critter.js"></script>
+<script>
+// S12 기본 모드 셀프 체크: 카메라 없이, 오래 연속으로 작업할 때만 묻는다. 15초 안에 답하지 않으면 조용히 사라진다.
+const B = window.barun, C = window.Critter;
+document.head.insertAdjacentHTML('beforeend', `<style>${C.CRITTER_CSS}</style>`);
+B.on('selfcheck-info', (i) => {
+  document.getElementById('sub').textContent = `${i.minutes}분째 쉬지 않고 작업 중이에요`;
+  const opts = [['good', '바른 자세', 'good'], ['turtle', '목이 앞으로', 'turtle'], ['slouch', '구부정', 'slouch'], ['tilt', '한쪽으로 기움', 'tilt']];
+  document.getElementById('opts').innerHTML = opts.map(([k, t, pose]) => `<button class="opt" data-a="${k}"><div class="pic"><div>${C.critterSVG(i.animal, pose, { tint: 'none', still: true })}</div></div>${t}</button>`).join('');
+  document.querySelectorAll('[data-a]').forEach((b) => (b.onclick = () => B.send('selfcheck-answer', b.dataset.a)));
+});
+document.getElementById('later').onclick = () => B.send('selfcheck-close');
+setTimeout(() => B.send('selfcheck-close'), 15000);
+</script></body></html>
