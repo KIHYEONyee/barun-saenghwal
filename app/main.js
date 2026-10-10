@@ -394,7 +394,10 @@ function registerIpc() {
 }
 
 // ---------- 시작 ----------
+const trace = (m) => { if (process.env.JASAI_TRACE) process.stderr.write(`[trace] ${m}\n`); };
+trace('main.js 로드');
 app.whenReady().then(async () => {
+  trace('ready');
   protocol.handle('app', (req) => {
     const u = new URL(req.url);
     if (u.host === 'models') return net.fetch(pathToFileURL(path.join(MODELS_DIR, decodeURIComponent(u.pathname))).toString());
@@ -403,17 +406,20 @@ app.whenReady().then(async () => {
     if (!p.startsWith(__dirname)) return new Response('forbidden', { status: 403 });
     return net.fetch(pathToFileURL(p).toString());
   });
+  trace('protocol 등록');
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(['media', 'notifications'].includes(perm)));
   session.defaultSession.setPermissionCheckHandler((wc, perm) => ['media', 'notifications'].includes(perm));
   if (process.platform === 'darwin' && !DEV.fakeImage) { try { await systemPreferences.askForMediaAccess('camera'); } catch { /* 권한 창 실패 무시 */ } }
 
+  trace('권한 처리');
   store = new Store(app.getPath('userData'));
+  trace('store');
   if (DEV.seed) require('./dev/seed')(store);
   registerIpc();
-  createMain();
-  createAnalyzer();
-  createWidget();
-  createTray();
+  createMain(); trace('main 창');
+  createAnalyzer(); trace('분석 창');
+  createWidget(); trace('위젯');
+  createTray(); trace('트레이');
   if (DEV.shots) require('./dev/shots')({ app, win, store, live, onPosture, openLock, openSelfcheck, setDim, createMain, send, dir: DEV.shots });
 });
 app.on('window-all-closed', (e) => { /* 위젯·트레이 앱이라 창을 다 닫아도 계속 실행 */ });
