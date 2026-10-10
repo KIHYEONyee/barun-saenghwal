@@ -6,7 +6,8 @@ from math import atan2, degrees, hypot
 import numpy as np
 
 MIN_VIS = 0.5
-NEED = (0, 7, 8, 11, 12)   # 코, 양 귀, 양 어깨가 보여야 판정
+EAR_VIS = 0.3              # 귀는 머리카락·거리 때문에 visibility가 낮게 나오기 쉬워 기준을 낮춘다
+NEED = (0, 11, 12)         # 코, 양 어깨는 MIN_VIS, 양 귀(7, 8)는 EAR_VIS 이상이어야 판정
 METRICS = ["shoulder_w", "ear_d", "face_ratio", "neck_h", "head_pitch", "head_roll", "shoulder_tilt", "head_shift", "chin_rest"]
 
 # 기준값 대비 얼마나 달라지면 문제로 볼지. 직접 모은 데이터로 조정할 값들
@@ -26,7 +27,7 @@ CAUTION_SEC = 1.5   # 이보다 짧게 나타난 문제는 무시
 
 def metrics(lm, w, h):
     """lm: (33,4) 정규화 좌표(x, y, z, visibility). 반환: 지표 dict, 얼굴·어깨가 안 보이면 None."""
-    if min(lm[i, 3] for i in NEED) < MIN_VIS:
+    if min(lm[i, 3] for i in NEED) < MIN_VIS or min(lm[7, 3], lm[8, 3]) < EAR_VIS:
         return None
     P = lm[:, :2] * [w, h]
     dist = lambda a, b: hypot(*(a - b))

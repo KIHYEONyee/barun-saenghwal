@@ -1,5 +1,5 @@
 """웹캠 실시간 자세 데모. 사용: python scripts/demo_webcam.py [카메라번호] [--selftest]
-키: v 정면/측면 전환 / q 종료 / s 스냅샷 저장 / [ ] 경고 임계값 조절 / n 다음 카메라로 전환
+키: v 정면/측면 전환 / q 종료 / s 스냅샷 저장 / [ ] 경고 임계값 조절 / n 다음 카메라로 전환(고른 카메라는 다음 실행 때도 먼저 사용) / d 기준 대비 수치 표시
 정면 기준 자세: c=바르게 앉아 기준 자세 측정(CAL_SEC초). 측정 후 정면 모드는 기준 대비 변화로 부위별 판정
 데이터 수집: g=바른 자세 기록 시작, b=나쁜 자세 기록 시작, x=기록 중지 (영상은 저장하지 않고 특징 숫자는 data/out/mine.csv, 관절 좌표 원본은 data/out/mine_landmarks.csv에 저장)
 기준 자세 측정 프레임의 관절 원본은 data/out/mine_baseline.csv에 저장. 같은 session 값으로 기록 데이터와 묶인다
@@ -65,7 +65,17 @@ def draw_lines(frame, lines, x, y, gap=34):
 def open_cam(i):
     # CAP_DSHOW는 윈도우 전용. 맥(AVFoundation)·리눅스에서는 OpenCV 기본 백엔드를 쓴다
     c = cv2.VideoCapture(i, cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY)
-    return c if c.isOpened() else None
+    if not c.isOpened(): return None
+    c.set(cv2.CAP_PROP_FRAME_WIDTH, 1280); c.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)   # 멀리 앉아도 관절이 잘 잡히게 고해상도 요청(지원 안 하면 무시됨)
+    return c
+
+CAM_FILE = ROOT / "data/out/camera.txt"   # 마지막으로 고른 카메라 번호. 맥은 아이폰 연속성 카메라 때문에 번호가 바뀌어 기억해 둔다
+def remember_cam(i):
+    try: CAM_FILE.write_text(str(i))
+    except OSError: pass
+def saved_cam():
+    try: return int(CAM_FILE.read_text())
+    except (OSError, ValueError): return None
 
 def looks_real(c):
     """가상/차단 카메라는 단색 배경의 안내 화면을 내보낸다. 한 가지 색이 화면 대부분이면 실제 영상이 아니다."""
@@ -85,7 +95,10 @@ def next_cam(cur, n=5):
     return None, cur
 
 cap = None
-for i in ([cam] if cam is not None else range(4)):
+if cam is not None: remember_cam(cam)   # 번호를 직접 주면 다음부터 그 카메라를 먼저 쓴다
+last = saved_cam()
+order = [cam] if cam is not None else ([last] if last is not None else []) + [i for i in range(4) if i != last]
+for i in order:
     c = open_cam(i)
     if c and (cam is not None or looks_real(c)):
         cap, cam = c, i; break
@@ -96,6 +109,7 @@ print(f"카메라 {cam}번 사용. 원하는 카메라가 아니면 창에서 n 
 
 thr, ema, t0, bad_since = 0.5, None, time.time(), None
 base, cal_until, cal_samples = None, None, []   # 정면 기준 자세
+SHOW_NUM, numbers = False, ""                   # d 키: 기준 대비 수치 표시(문턱값 조정용)
 tracker = IssueTracker()
 flash = None   # 잠깐 띄울 안내 (한글, 영문, 색, 끝나는 시각)
 UPPER = [(11, 12), (11, 13), (12, 14), (7, 11), (8, 12), (0, 7), (0, 8)]
@@ -117,6 +131,7 @@ while True:
     res = det.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)), int((time.time() - t0) * 1000))
     status, color, angle = "NO PERSON", (128, 128, 128), None
     notes = []   # 화면 왼쪽 아래에 그릴 안내 [(한글, 영문, 색)]
+    numbers = ""
     if res.pose_landmarks:
         pl = res.pose_landmarks[0]
         lm = np.array([[p.x, p.y, p.z, p.visibility] for p in pl])
@@ -144,15 +159,27 @@ while True:
         angle, _ = cva([(p.x, p.y, p.visibility) for p in pl], w, h)
         if VIEW == "front" and base is not None and cal_until is None:
             # 정면 + 기준 자세 있음: 기준 대비 변화로 부위별 판정 (모델 확률은 참고로만 표시)
-            shown = tracker.update(detect_issues(m, base)) if m is not None else tracker.update([])
-            bad = bool(shown)
-            longest = shown[0][1] if shown else 0
-            color = (0, 0, 255) if longest >= WARN_SEC else (0, 200, 255) if bad else (0, 200, 0)
-            status = "BAD POSTURE" if bad else "GOOD"
-            for (part, key, ko, en), dur in shown:
-                notes.append((f"{ko} ({dur:.0f}초)", f"{en} ({dur:.0f}s)", color))
-            if m is None:
-                notes.append(("얼굴과 어깨가 보이게 앉아주세요", "show face and shoulders", (200, 200, 200)))
+            if m is None:   # 귀·어깨가 잘 안 보여 판정할 수 없음. 바른 자세로 표시하지 않는다
+                tracker.update([]); bad = False
+                status, color = "CAN'T SEE", (160, 160, 160)
+                notes.append(("얼굴과 양 어깨가 잘 보이게 앉아주세요", "show face and both shoulders", (200, 200, 200)))
+            else:
+                shown = tracker.update(detect_issues(m, base))
+                bad = bool(shown)
+                longest = shown[0][1] if shown else 0
+                color = (0, 0, 255) if longest >= WARN_SEC else (0, 200, 255) if bad else (0, 200, 0)
+                status = "BAD POSTURE" if bad else "GOOD"
+                for (part, key, ko, en), dur in shown:
+                    notes.append((f"{ko} ({dur:.0f}초)", f"{en} ({dur:.0f}s)", color))
+                dist_rel = m["shoulder_w"] / base["shoulder_w"]
+                if not 0.75 < dist_rel < 1.35:   # 기준을 잰 거리와 많이 다름. 크기 비교가 틀어진다
+                    notes.append((f"기준을 잰 거리와 달라요({dist_rel:.0%}). 이 자리에서 c로 다시 측정하세요",
+                                  f"distance changed ({dist_rel:.0%}) - press c here", (0, 255, 255)))
+                if SHOW_NUM:
+                    numbers = (f"roll {m['head_roll'] - base['head_roll']:+.1f}  tilt {m['shoulder_tilt'] - base['shoulder_tilt']:+.1f}  "
+                               f"face {m['face_ratio'] / base['face_ratio'] - 1:+.0%}  size {m['ear_d'] / base['ear_d'] - 1:+.0%}  "
+                               f"pitch {m['head_pitch'] - base['head_pitch']:+.2f}  neck {m['neck_h'] / base['neck_h'] - 1:+.0%}  "
+                               f"shift {m['head_shift'] - base['head_shift']:+.2f}")
         else:
             bad = ema >= thr
             status, color = ("BAD POSTURE", (0, 0, 255)) if bad else ("GOOD", (0, 200, 0))
@@ -182,7 +209,9 @@ while True:
     cv2.putText(frame, f"{model_txt} {ema:.2f} (thr {thr:.2f})" if ema is not None else f"{model_txt} -", (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     cv2.putText(frame, f"CVA {angle:.0f} deg" if angle is not None and VIEW == "side" else "CVA -", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     tag = VIEW.upper() + (" (baseline)" if VIEW == "front" and base is not None else "" if VIEW == "side" or HAS_FRONT else " (side model)")
-    cv2.putText(frame, f"CAM {cam}  VIEW: {tag}  [v: switch, n: camera, c: calibrate]", (10, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
+    cv2.putText(frame, f"CAM {cam}  VIEW: {tag}  [v: switch, n: camera, c: calibrate, d: numbers]", (10, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 2)
+    if numbers:
+        cv2.putText(frame, numbers, (10, h - 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
     if bad_since and time.time() - bad_since > 5:
         cv2.putText(frame, f"bad for {time.time() - bad_since:.0f}s - sit up!", (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
     if flash and time.time() < flash[3]:
@@ -206,7 +235,11 @@ while True:
         VIEW = "side" if VIEW == "front" else "front"; ema, bad_since, rec, cal_until = None, None, None, None
         tracker.reset()
         print(f"모드 전환: {VIEW}" + ("" if VIEW == "side" or HAS_FRONT or base is not None else " (정면 기준 자세가 없어 측면 모델로 판정. c로 측정하세요)"))
-    if k == ord("c"):
+    if k == ord("d"):
+        SHOW_NUM = not SHOW_NUM
+    if k == ord("c") and cal_until is not None:
+        pass   # 측정 중에 또 누르면 무시(처음부터 다시 시작되지 않게)
+    elif k == ord("c"):
         if VIEW != "front":
             print("기준 자세 측정은 정면 모드에서만 합니다. v로 정면 모드로 바꾸세요.")
         else:
@@ -218,7 +251,7 @@ while True:
         if c2 is None:
             print("다른 카메라를 찾지 못했습니다.")
         else:
-            cap.release(); cap, cam = c2, i2
+            cap.release(); cap, cam = c2, i2; remember_cam(cam)
             ema, bad_since, rec, base, cal_until = None, None, None, None, None
             tracker.reset()
             print(f"카메라 {cam}번으로 전환. 카메라가 바뀌어 기준 자세를 다시 측정해야 합니다(c).")
