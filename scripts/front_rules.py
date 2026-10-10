@@ -16,13 +16,14 @@ TH = dict(
     close=1.25,       # 얼굴이 기준보다 25% 이상 커지고
     close_body=1.15,  # 어깨도 15% 이상 커짐 → 몸 전체가 화면에 다가옴
     head_down=0.15,   # 코가 귀보다 내려간 정도(귀 사이 거리 대비)의 증가량
-    roll=8.0,         # 고개 기울기(도)
-    tilt=5.0,         # 어깨선 기울기(도)
+    roll=10.0,        # 고개 기울기(도). MultiPosture 평가로 8→10 (바른 자세 오탐 감소)
+    tilt=6.0,         # 어깨선 기울기(도). MultiPosture 평가로 5→6
     shrug=0.82,       # 귀-어깨 세로 거리가 기준의 82% 미만
     shift=0.20,       # 코의 좌우 위치 변화(어깨 너비 대비)
     chin=0.35,        # 손목-입 거리(어깨 너비 대비)가 이보다 작으면 턱 괴기
 )
 CAUTION_SEC = 1.5   # 이보다 짧게 나타난 문제는 무시
+K_STD = 3.0         # 기준 측정 때 흔들림(표준편차)의 몇 배까지는 정상으로 볼지. 0이면 끔. 흔들림이 큰 사람의 오탐을 줄인다
 
 
 def metrics(lm, w, h):
@@ -59,6 +60,7 @@ def make_baseline(samples):
     A = np.array([[s[k] for k in METRICS] for s in samples])
     mean, std = A.mean(0), A.std(0)
     base = dict(zip(METRICS, mean))
+    base["_std"] = dict(zip(METRICS, std))   # 문턱값 자동 조정(K_STD)에 쓴다
     if base["face_ratio"] < 0.25:   # 양 귀가 겹쳐 보일 만큼 몸이 옆으로 돌아감. 정면이면 보통 0.35 이상
         return None, "몸이 옆으로 돌아가 있습니다. 카메라 정면을 보고 앉아 다시 측정하세요."
     if std[METRICS.index("head_roll")] > 3 or std[0] / mean[0] > 0.06:
@@ -66,8 +68,13 @@ def make_baseline(samples):
     return base, f"기준 자세 저장 ({len(samples)}프레임)"
 
 
-def detect_issues(m, base, t=TH):
-    """지금 지표와 기준값을 비교해 문제 목록을 돌려준다. 항목: (부위, 키, 한글 안내, 영문 약칭)."""
+def detect_issues(m, base, t=TH, k_std=None):
+    """지금 지표와 기준값을 비교해 문제 목록을 돌려준다. 항목: (부위, 키, 한글 안내, 영문 약칭).
+    문턱값은 TH 값과 '기준 측정 때 흔들림 x k_std' 중 큰 쪽을 쓴다."""
+    k = K_STD if k_std is None else k_std
+    sd = base.get("_std", {})
+    lim = lambda name, thr: max(thr, k * sd.get(name, 0.0))                              # 차이로 비교하는 지표
+    rlim = lambda name, thr: max(thr, k * sd.get(name, 0.0) / abs(base[name] or 1.0))    # 비율로 비교하는 지표(thr = 1 기준 여유)
     side = lambda v: "오른쪽" if v > 0 else "왼쪽"
     eng = lambda v: "R" if v > 0 else "L"
     out = []
@@ -79,21 +86,21 @@ def detect_issues(m, base, t=TH):
     tilt = m["shoulder_tilt"] - base["shoulder_tilt"]
     shift = m["head_shift"] - base["head_shift"]
 
-    turtle = face_rel > t["turtle"]
+    turtle = face_rel - 1 > rlim("face_ratio", t["turtle"] - 1)
     if turtle:
         out.append(("neck", "turtle", "목이 앞으로 나와 있어요", "TURTLE NECK"))
-    elif close_rel > t["close"] and body_rel > t["close_body"]:
+    elif close_rel - 1 > rlim("ear_d", t["close"] - 1) and body_rel - 1 > rlim("shoulder_w", t["close_body"] - 1):
         out.append(("head", "close", "화면에 너무 가까워요", "TOO CLOSE"))
-    head_down = m["head_pitch"] - base["head_pitch"] > t["head_down"]
+    head_down = m["head_pitch"] - base["head_pitch"] > lim("head_pitch", t["head_down"])
     if head_down:
         out.append(("neck", "head_down", "고개를 숙이고 있어요", "HEAD DOWN"))
-    if abs(roll) > t["roll"]:
+    if abs(roll) > lim("head_roll", t["roll"]):
         out.append(("head", "roll", f"고개가 {side(roll)}으로 기울어져 있어요", f"HEAD TILT {eng(roll)}"))
-    if abs(tilt) > t["tilt"]:
+    if abs(tilt) > lim("shoulder_tilt", t["tilt"]):
         out.append(("shoulder", "tilt", f"{side(tilt)} 어깨가 내려가 있어요", f"SHOULDER {eng(tilt)} DOWN"))
-    elif neck_rel < t["shrug"] and not turtle and not head_down:
+    elif 1 - neck_rel > rlim("neck_h", 1 - t["shrug"]) and not turtle and not head_down:
         out.append(("shoulder", "shrug", "어깨가 올라가 있어요. 힘을 빼 보세요", "SHRUG"))
-    if abs(shift) > t["shift"]:
+    if abs(shift) > lim("head_shift", t["shift"]):
         out.append(("torso", "lean", f"몸이 {side(shift)}으로 기울어져 있어요", f"LEAN {eng(shift)}"))
     if m["chin_rest"] < t["chin"]:
         out.append(("arm", "chin", "턱을 괴고 있어요", "CHIN REST"))
