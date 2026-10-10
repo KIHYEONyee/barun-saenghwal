@@ -41,7 +41,7 @@ const live = {
 };
 
 // ---------- 공통 ----------
-const send = (w, ch, data) => { if (w && !w.isDestroyed()) w.webContents.send(ch, data); };
+const send = (w, ch, data) => { if (w && typeof w.isDestroyed === 'function' && !w.isDestroyed()) w.webContents.send(ch, data); };
 const broadcast = (ch, data) => Object.values(win).forEach((w) => send(w, ch, data));
 const pageURL = (file, hash = '') => `app://bundle/renderer/${file}${hash ? '#' + hash : ''}`;
 const cautionSec = () => ({ fast: 2, normal: 3, relaxed: 5 }[store.settings.sensitivity] || 3);
@@ -79,6 +79,7 @@ function createMain(hash) {
 }
 
 const WIDGET_PX = { small: 90, medium: 120, large: 160 };
+let widgetSize = null;   // 이동할 때 크기를 고정하려고 기억(win 에 넣으면 창 목록으로 오인돼 broadcast 가 깨짐)
 function createWidget() {
   if (win.widget || !store.settings.mode || store.settings.display === 'menubar') return;
   const px = WIDGET_PX[store.settings.widgetSize] || 120;
@@ -89,9 +90,11 @@ function createWidget() {
     width: W, height: H, x: pos.x, y: pos.y, frame: false, transparent: true, resizable: false, hasShadow: false,
     skipTaskbar: true, alwaysOnTop: true, focusable: false, show: false, backgroundColor: '#00000000', webPreferences: webPrefs(),
   });
+  widgetSize = { width: W, height: H };   // 이동할 때 크기를 고정하기 위해 기억
   win.widget.setAlwaysOnTop(true, 'screen-saver');
   if (store.settings.allSpaces) win.widget.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  if (store.settings.clickThrough) win.widget.setIgnoreMouseEvents(true, { forward: true });
+  // 평소에는 마우스를 뒤 창으로 통과시키고(forward: 움직임만 받음), 캐릭터 그림 위에 있을 때만 widget.js가 'widget-ignore'로 잡는다
+  win.widget.setIgnoreMouseEvents(true, { forward: true });
   win.widget.loadURL(pageURL('widget.html'));
   win.widget.once('ready-to-show', () => { if (SHOW) win.widget.showInactive(); });
   win.widget.webContents.on('did-finish-load', () => updateWidget());
@@ -350,8 +353,15 @@ function registerIpc() {
   ipcMain.on('stretch-done', (e, id) => { store.count('stretchDone'); live.restDue = false; live.sitStart = Date.now(); updateWidget(); });
   ipcMain.on('stretch-rec', () => store.count('stretchRec'));
   ipcMain.on('open-main', (e, hash) => createMain(hash));
-  ipcMain.on('widget-move', (e, { x, y }) => { if (win.widget) win.widget.setPosition(Math.round(x), Math.round(y)); });
+  ipcMain.on('widget-move', (e, { x, y }) => {
+    // setPosition만 쓰면 Windows(배율 100% 아님)에서 이동할 때마다 창이 조금씩 커진다 -> 크기까지 함께 지정
+    if (win.widget && widgetSize) win.widget.setBounds({ x: Math.round(x), y: Math.round(y), ...widgetSize });
+  });
   ipcMain.handle('widget-pos', () => (win.widget ? win.widget.getPosition() : [0, 0]));
+  ipcMain.on('widget-ignore', (e, ignore) => {
+    if (!win.widget) return;
+    win.widget.setIgnoreMouseEvents(store.settings.clickThrough ? true : !!ignore, { forward: true });   // 클릭 통과 옵션이 켜져 있으면 항상 통과
+  });
   ipcMain.on('widget-moved', () => { if (win.widget) { const [x, y] = win.widget.getPosition(); store.setSettings({ widgetPos: { x, y } }); } });
   ipcMain.on('widget-click', () => {
     if (!win.widget) return;

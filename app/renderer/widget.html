@@ -4,11 +4,12 @@
   html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; }
   #w { position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: center; cursor: grab; }
   #w:active { cursor: grabbing; }
-  #art { width: var(--px, 120px); height: var(--px, 120px); }
-  #dot { position: absolute; right: 12%; bottom: 8%; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #fff; background: oklch(0.62 0.13 155); box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  #box { position: relative; width: var(--px, 120px); height: var(--px, 120px); }   /* 캐릭터와 점을 한 박스로 묶어 항상 붙어 있게 한다 */
+  #art { width: 100%; height: 100%; }
+  #dot { position: absolute; right: 2%; bottom: 10%; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #fff; background: oklch(0.62 0.13 155); box-shadow: 0 1px 3px rgba(0,0,0,.25); }
   #dot.off { background: oklch(0.75 0.005 85); }
 </style></head>
-<body><div id="w"><div id="art"></div><span id="dot"></span></div>
+<body><div id="w"><div id="box"><div id="art"></div><span id="dot"></span></div></div>
 <script src="critter.js"></script>
 <script src="widget.js"></script>
 </body></html>
