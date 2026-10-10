@@ -1,6 +1,6 @@
 """웹캠 실시간 자세 데모. 사용: python scripts/demo_webcam.py [카메라번호] [--selftest]
 키: v 정면/측면 전환 / q 종료 / s 스냅샷 저장 / [ ] 경고 임계값 조절
-데이터 수집: g=바른 자세 기록 시작, b=나쁜 자세 기록 시작, x=기록 중지 (영상은 저장하지 않고 특징 숫자만 data/out/mine.csv에 저장)
+데이터 수집: g=바른 자세 기록 시작, b=나쁜 자세 기록 시작, x=기록 중지 (영상은 저장하지 않고 특징 숫자는 data/out/mine.csv, 관절 좌표 원본은 data/out/mine_landmarks.csv에 저장)
 옵션: --view front|side (수집 데이터에 붙는 촬영 방향 태그, 기본 front)"""
 import sys, time
 from pathlib import Path
@@ -20,6 +20,8 @@ args = [a for a in args if a not in ("front", "side")]
 cam = int(args[0]) if args else None
 SESSION = int(time.time())
 MINE = ROOT / "data/out/mine.csv"
+MINE_LM = ROOT / "data/out/mine_landmarks.csv"   # mine.csv와 같은 행 순서로 관절 원본 저장. 특징 계산이 바뀌어도 다시 계산할 수 있다
+MINE.parent.mkdir(parents=True, exist_ok=True)
 rec, rec_n = None, 0   # rec: None / 0(좋음) / 1(나쁨)
 
 def load_models():
@@ -31,7 +33,8 @@ det = vision.PoseLandmarker.create_from_options(vision.PoseLandmarkerOptions(
     base_options=mpt.BaseOptions(model_asset_buffer=(ROOT / "models/pose_landmarker_full.task").read_bytes()),
     running_mode=vision.RunningMode.VIDEO))
 def open_cam(i):
-    c = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+    # CAP_DSHOW는 윈도우 전용. 맥(AVFoundation)·리눅스에서는 OpenCV 기본 백엔드를 쓴다
+    c = cv2.VideoCapture(i, cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY)
     return c if c.isOpened() else None
 
 def looks_real(c):
@@ -81,6 +84,10 @@ while True:
             with open(MINE, "a", encoding="utf-8") as fh:
                 if new: fh.write("session,view,label," + ",".join(f"f{i}" for i in range(len(feat))) + "\n")
                 fh.write(f"{SESSION},{VIEW},{rec}," + ",".join(f"{v:.6f}" for v in feat) + "\n")
+            new = not MINE_LM.exists()
+            with open(MINE_LM, "a", encoding="utf-8") as fh:
+                if new: fh.write("session,view,label,w,h," + ",".join(f"{n}{i}" for i in range(33) for n in "xyzv") + "\n")
+                fh.write(f"{SESSION},{VIEW},{rec},{w},{h}," + ",".join(f"{v:.5f}" for v in lm.ravel()) + "\n")
             rec_n += 1
         ema = p_bad if ema is None else 0.8 * ema + 0.2 * p_bad   # 떨림 완화
         angle, _ = cva([(p.x, p.y, p.visibility) for p in pl], w, h)
