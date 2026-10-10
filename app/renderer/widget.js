@@ -18,7 +18,7 @@ let ignoring = true;   // main.js가 만들 때 통과 상태로 시작
 const setIgnore = (v) => { if (v !== ignoring) { ignoring = v; B.send('widget-ignore', v); } };
 const onCharacter = (e) => {
   const t = document.elementFromPoint(e.clientX, e.clientY);
-  return !!t && t.id !== 'w' && t.id !== 'art' && t !== document.body && t !== document.documentElement && t.tagName.toLowerCase() !== 'svg';
+  return !!t && t.id !== 'w' && t.id !== 'box' && t.id !== 'art' && t !== document.body && t !== document.documentElement && t.tagName.toLowerCase() !== 'svg';
 };
 document.addEventListener('mousemove', (e) => { if (!drag) setIgnore(!onCharacter(e)); });   // 끄는 중에는 계속 잡고 있는다
 document.addEventListener('mouseleave', () => { if (!drag) setIgnore(true); });
