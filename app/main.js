@@ -91,7 +91,8 @@ function createWidget() {
   });
   win.widget.setAlwaysOnTop(true, 'screen-saver');
   if (store.settings.allSpaces) win.widget.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  if (store.settings.clickThrough) win.widget.setIgnoreMouseEvents(true, { forward: true });
+  // 평소에는 마우스를 뒤 창으로 통과시키고(forward: 움직임만 받음), 캐릭터 그림 위에 있을 때만 widget.js가 'widget-ignore'로 잡는다
+  win.widget.setIgnoreMouseEvents(true, { forward: true });
   win.widget.loadURL(pageURL('widget.html'));
   win.widget.once('ready-to-show', () => { if (SHOW) win.widget.showInactive(); });
   win.widget.webContents.on('did-finish-load', () => updateWidget());
@@ -352,6 +353,10 @@ function registerIpc() {
   ipcMain.on('open-main', (e, hash) => createMain(hash));
   ipcMain.on('widget-move', (e, { x, y }) => { if (win.widget) win.widget.setPosition(Math.round(x), Math.round(y)); });
   ipcMain.handle('widget-pos', () => (win.widget ? win.widget.getPosition() : [0, 0]));
+  ipcMain.on('widget-ignore', (e, ignore) => {
+    if (!win.widget) return;
+    win.widget.setIgnoreMouseEvents(store.settings.clickThrough ? true : !!ignore, { forward: true });   // 클릭 통과 옵션이 켜져 있으면 항상 통과
+  });
   ipcMain.on('widget-moved', () => { if (win.widget) { const [x, y] = win.widget.getPosition(); store.setSettings({ widgetPos: { x, y } }); } });
   ipcMain.on('widget-click', () => {
     if (!win.widget) return;

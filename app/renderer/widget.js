@@ -13,6 +13,16 @@ B.on('widget', (s) => {
   makeTrayFrames(s.animal);
 });
 
+// 창은 캐릭터보다 크고 투명하므로, 캐릭터 그림(또는 점) 위에서만 마우스를 받는다. 빈 곳은 뒤에 있는 창으로 통과
+let ignoring = true;   // main.js가 만들 때 통과 상태로 시작
+const setIgnore = (v) => { if (v !== ignoring) { ignoring = v; B.send('widget-ignore', v); } };
+const onCharacter = (e) => {
+  const t = document.elementFromPoint(e.clientX, e.clientY);
+  return !!t && t.id !== 'w' && t.id !== 'art' && t !== document.body && t !== document.documentElement && t.tagName.toLowerCase() !== 'svg';
+};
+document.addEventListener('mousemove', (e) => { if (!drag) setIgnore(!onCharacter(e)); });   // 끄는 중에는 계속 잡고 있는다
+document.addEventListener('mouseleave', () => { if (!drag) setIgnore(true); });
+
 // 끌기: 4px 이상 움직이면 이동, 아니면 클릭(메뉴)
 let drag = null;
 w.addEventListener('mousedown', async (e) => {
