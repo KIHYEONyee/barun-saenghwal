@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>바른생활 교정 유도 화면</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body { background: #1c1a17; color: #fff; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .wrap { display: grid; gap: 22px; justify-items: center; text-align: center; max-width: 860px; padding: 40px; }
+  .art { width: 160px; height: 160px; }
+  h1 { font-size: 40px; }
+  .sub { color: oklch(0.8 0.01 85); font-size: 18px; }
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; width: 780px; margin-top: 12px; text-align: left; }
+  .panel { background: oklch(0.27 0.008 70); border-radius: 16px; padding: 20px; display: grid; gap: 12px; }
+  .panel .head { display: flex; justify-content: space-between; font-weight: 700; }
+  .panel .head span { color: oklch(0.8 0.15 155); }
+  .panel.off { opacity: .55; }
+  .cam { height: 150px; }
+  input { font: inherit; font-size: 26px; font-weight: 700; padding: 14px 16px; border-radius: 12px; border: 1px solid oklch(0.4 0.01 70); background: oklch(0.22 0.006 70); color: #fff; }
+  input::placeholder { color: oklch(0.5 0.01 70); }
+  .phrase { font-size: 26px; font-weight: 800; color: oklch(0.6 0.01 70); }
+  .bar { background: oklch(0.35 0.008 70); } .bar > i { background: oklch(0.8 0.15 155); }
+  .links { display: flex; gap: 22px; color: oklch(0.75 0.01 85); font-size: 14px; margin-top: 8px; }
+  .links button { background: none; border: 0; color: inherit; font-weight: 500; text-decoration: underline; text-underline-offset: 3px; }
+</style></head>
+<body><div class="wrap">
+  <div class="art" id="art"></div>
+  <h1>잠깐, 자세를 바로 하고 갈까요?</h1>
+  <div class="sub" id="sub"></div>
+  <div class="panels">
+    <div class="panel" id="p1"><div class="head">① 바른 자세 3초 <span id="p1n">0 / 3초</span></div><div class="cam" id="cam"><span class="tag">카메라 미리보기</span></div><div class="bar"><i id="p1b" style="width:0%"></i></div></div>
+    <div class="panel off" id="p2"><div class="head">② 따라 입력하기 <span id="p2n" style="color:oklch(0.6 0.01 70)">①을 마치면 열려요</span></div><div class="phrase">바른 자세로 앉자</div><input id="in" placeholder="여기에 입력" disabled autocomplete="off"></div>
+  </div>
+  <div class="links"><button id="emg"></button><span>|</span><button id="rep">지금 바른 자세인데요 (판정 신고)</button></div>
+</div>
+<script src="../shared/rules.js"></script>
+<script src="critter.js"></script>
+<script src="lock.js"></script>
+</body></html>

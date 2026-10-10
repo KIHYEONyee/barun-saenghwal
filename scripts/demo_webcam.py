@@ -177,7 +177,7 @@ while True:
                 longest = shown[0][1] if shown else 0
                 color = (0, 0, 255) if longest >= WARN_SEC else (0, 200, 255) if bad else (0, 200, 0)
                 status = "BAD POSTURE" if bad else "GOOD"
-                for (part, key, ko, en), dur in shown:
+                for (part, key, ko, en, _sev), dur in shown:
                     notes.append((f"{ko} ({dur:.0f}초)", f"{en} ({dur:.0f}s)", color))
                 dist_rel = sm["shoulder_w"] / base["shoulder_w"]
                 if not 0.75 < dist_rel < 1.35:   # 기준을 잰 거리와 많이 다름. 크기 비교가 틀어진다

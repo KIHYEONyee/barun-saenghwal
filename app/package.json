@@ -1,0 +1,18 @@
+{
+  "name": "barun-saenghwal",
+  "productName": "바른생활",
+  "version": "0.1.0",
+  "description": "AI 컴퓨터 자세교정 & 스트레칭 코치 (데스크톱 위젯)",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/run.js"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1"
+  }
+}

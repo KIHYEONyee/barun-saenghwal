@@ -9,7 +9,10 @@ import numpy as np
 MIN_VIS = 0.5
 EAR_VIS = 0.3              # 귀는 머리카락·거리 때문에 visibility가 낮게 나오기 쉬워 기준을 낮춘다
 NEED = (0, 11, 12)         # 코, 양 어깨는 MIN_VIS, 양 귀(7, 8)는 EAR_VIS 이상이어야 판정
-METRICS = ["shoulder_w", "ear_d", "face_ratio", "neck_h", "head_pitch", "head_roll", "shoulder_tilt", "head_shift", "chin_rest"]
+METRICS = ["shoulder_w", "ear_d", "face_ratio", "neck_h", "head_pitch", "head_roll", "shoulder_tilt", "head_shift", "chin_rest",
+           "shoulder_y", "nose_y"]
+HAND = (15, 16, 17, 18, 19, 20, 21, 22)   # 손목, 새끼·검지·엄지. 턱은 손가락·손바닥으로 괴는 경우가 많다
+BASELINE_VERSION = 2   # METRICS가 바뀌면 올린다. 예전 기준 파일은 무시하고 다시 측정
 
 # 기준값 대비 얼마나 달라지면 문제로 볼지. 직접 모은 데이터로 조정할 값들
 TH = dict(
@@ -21,7 +24,9 @@ TH = dict(
     tilt=6.0,         # 어깨선 기울기(도). MultiPosture 평가로 5→6
     shrug=0.82,       # 귀-어깨 세로 거리가 기준의 82% 미만
     shift=0.20,       # 코의 좌우 위치 변화(어깨 너비 대비)
-    chin=0.35,        # 손목-입 거리(어깨 너비 대비)가 이보다 작으면 턱 괴기
+    chin=0.35,        # 손(손목·손가락)-턱 거리(어깨 너비 대비)가 이보다 작으면 턱 괴기
+    slouch=None,      # 어깨선과 코가 기준보다 이만큼(기준 어깨 너비 대비) 함께 내려가면 구부정. None = 끔.
+                      # MultiPosture에서 0.12로 켜면 새로 잡는 건 2%인데 바른 자세 오탐이 7%p 늘어 꺼둠. 웹캠 데이터로 검증 후 켤 것
 )
 CAUTION_SEC = 3.0   # 나쁜 자세가 이 시간 이상 계속되면 경고(위젯 노랑). 팀 결정 2026-10-10: 3초
 K_STD = 3.0         # 기준 측정 때 흔들림(표준편차)의 몇 배까지는 정상으로 볼지. 0이면 끔. 흔들림이 큰 사람의 오탐을 줄인다
@@ -40,7 +45,8 @@ def metrics(lm, w, h):
     if sw < 1 or ed < 1:
         return None
     smid, emid, nose, mouth = (sL + sR) / 2, (eL + eR) / 2, P[0], (P[9] + P[10]) / 2
-    wrists = [P[i] for i in (15, 16) if lm[i, 3] > MIN_VIS]
+    chin = mouth + 0.6 * (mouth - nose)   # 포즈 모델엔 턱 점이 없어 코→입 방향으로 연장해 추정
+    hands = [P[i] for i in HAND if lm[i, 3] > MIN_VIS]
     return dict(
         shoulder_w=sw,
         ear_d=ed,
@@ -50,7 +56,9 @@ def metrics(lm, w, h):
         head_roll=degrees(atan2(eR[1] - eL[1], eR[0] - eL[0])),       # + = 오른쪽 귀가 낮음(오른쪽으로 기울임)
         shoulder_tilt=degrees(atan2(sR[1] - sL[1], sR[0] - sL[0])),   # + = 오른쪽 어깨가 낮음
         head_shift=(nose[0] - smid[0]) / sw,                          # + = 오른쪽으로 치우침
-        chin_rest=min(dist(p, mouth) for p in wrists) / sw if wrists else 9.0,
+        chin_rest=min(dist(p, chin) for p in hands) / sw if hands else 9.0,
+        shoulder_y=smid[1],   # 화면 속 높이(픽셀). 기준과 비교해 상체가 가라앉았는지(구부정) 본다
+        nose_y=nose[1],
     )
 
 
@@ -70,8 +78,9 @@ def make_baseline(samples):
 
 
 def detect_issues(m, base, t=TH, k_std=None):
-    """지금 지표와 기준값을 비교해 문제 목록을 돌려준다. 항목: (부위, 키, 한글 안내, 영문 약칭).
-    문턱값은 TH 값과 '기준 측정 때 흔들림 x k_std' 중 큰 쪽을 쓴다."""
+    """지금 지표와 기준값을 비교해 문제 목록을 돌려준다. 항목: (부위, 키, 한글 안내, 영문 약칭, 심각도).
+    문턱값은 TH 값과 '기준 측정 때 흔들림 x k_std' 중 큰 쪽을 쓴다.
+    심각도 = 문턱값 대비 몇 배 벗어났는지(1.0 = 딱 문턱값). 교정 유도 화면처럼 강한 개입은 심각도가 높을 때만 쓴다."""
     k = K_STD if k_std is None else k_std
     sd = base.get("_std", {})
     lim = lambda name, thr: max(thr, k * sd.get(name, 0.0))                              # 차이로 비교하는 지표
@@ -87,24 +96,40 @@ def detect_issues(m, base, t=TH, k_std=None):
     tilt = m["shoulder_tilt"] - base["shoulder_tilt"]
     shift = m["head_shift"] - base["head_shift"]
 
-    turtle = face_rel - 1 > rlim("face_ratio", t["turtle"] - 1)
+    sw0 = base["shoulder_w"] or 1.0
+    drop_sh = (m["shoulder_y"] - base["shoulder_y"]) / sw0    # + = 어깨선이 내려감
+    drop_nose = (m["nose_y"] - base["nose_y"]) / sw0
+    sev = lambda v, l: abs(v) / l if l > 0 else 1.0
+
+    l_turtle = rlim("face_ratio", t["turtle"] - 1)
+    turtle = face_rel - 1 > l_turtle
     if turtle:
-        out.append(("neck", "turtle", "목이 앞으로 나와 있어요", "TURTLE NECK"))
+        out.append(("neck", "turtle", "목이 앞으로 나와 있어요", "TURTLE NECK", sev(face_rel - 1, l_turtle)))
     elif close_rel - 1 > rlim("ear_d", t["close"] - 1) and body_rel - 1 > rlim("shoulder_w", t["close_body"] - 1):
-        out.append(("head", "close", "화면에 너무 가까워요", "TOO CLOSE"))
-    head_down = m["head_pitch"] - base["head_pitch"] > lim("head_pitch", t["head_down"])
+        out.append(("head", "close", "화면에 너무 가까워요", "TOO CLOSE", sev(close_rel - 1, rlim("ear_d", t["close"] - 1))))
+    slouch = False
+    if t.get("slouch") is not None:
+        l_slouch = lim("shoulder_y", t["slouch"] * sw0) / sw0   # 흔들림(픽셀)도 기준 어깨 너비로 나눠 비교
+        slouch = drop_sh > l_slouch and drop_nose > l_slouch
+    if slouch:
+        out.append(("torso", "slouch", "등이 구부정해요. 허리를 펴 보세요", "SLOUCH", sev(min(drop_sh, drop_nose), l_slouch)))
+    l_down = lim("head_pitch", t["head_down"])
+    head_down = m["head_pitch"] - base["head_pitch"] > l_down
     if head_down:
-        out.append(("neck", "head_down", "고개를 숙이고 있어요", "HEAD DOWN"))
-    if abs(roll) > lim("head_roll", t["roll"]):
-        out.append(("head", "roll", f"고개가 {side(roll)}으로 기울어져 있어요", f"HEAD TILT {eng(roll)}"))
-    if abs(tilt) > lim("shoulder_tilt", t["tilt"]):
-        out.append(("shoulder", "tilt", f"{side(tilt)} 어깨가 내려가 있어요", f"SHOULDER {eng(tilt)} DOWN"))
-    elif 1 - neck_rel > rlim("neck_h", 1 - t["shrug"]) and not turtle and not head_down:
-        out.append(("shoulder", "shrug", "어깨가 올라가 있어요. 힘을 빼 보세요", "SHRUG"))
-    if abs(shift) > lim("head_shift", t["shift"]):
-        out.append(("torso", "lean", f"몸이 {side(shift)}으로 기울어져 있어요", f"LEAN {eng(shift)}"))
+        out.append(("neck", "head_down", "고개를 숙이고 있어요", "HEAD DOWN", sev(m["head_pitch"] - base["head_pitch"], l_down)))
+    l_roll = lim("head_roll", t["roll"])
+    if abs(roll) > l_roll:
+        out.append(("head", "roll", f"고개가 {side(roll)}으로 기울어져 있어요", f"HEAD TILT {eng(roll)}", sev(roll, l_roll)))
+    l_tilt, l_shrug = lim("shoulder_tilt", t["tilt"]), rlim("neck_h", 1 - t["shrug"])
+    if abs(tilt) > l_tilt:
+        out.append(("shoulder", "tilt", f"{side(tilt)} 어깨가 내려가 있어요", f"SHOULDER {eng(tilt)} DOWN", sev(tilt, l_tilt)))
+    elif 1 - neck_rel > l_shrug and not turtle and not head_down and not slouch:
+        out.append(("shoulder", "shrug", "어깨가 올라가 있어요. 힘을 빼 보세요", "SHRUG", sev(1 - neck_rel, l_shrug)))
+    l_shift = lim("head_shift", t["shift"])
+    if abs(shift) > l_shift:
+        out.append(("torso", "lean", f"몸이 {side(shift)}으로 기울어져 있어요", f"LEAN {eng(shift)}", sev(shift, l_shift)))
     if m["chin_rest"] < t["chin"]:
-        out.append(("arm", "chin", "턱을 괴고 있어요", "CHIN REST"))
+        out.append(("arm", "chin", "턱을 괴고 있어요", "CHIN REST", t["chin"] / max(m["chin_rest"], 1e-6)))
     return out
 
 
@@ -115,7 +140,7 @@ def smooth(prev, m, alpha=0.3):
 
 def save_baseline(path, base, session, camera):
     """기준값을 파일로 저장해 다음 실행 때 다시 쓰게 한다. 숫자만 저장."""
-    Path(path).write_text(json.dumps({"version": 1, "session": session, "camera": camera, "saved": time.time(),
+    Path(path).write_text(json.dumps({"version": BASELINE_VERSION, "session": session, "camera": camera, "saved": time.time(),
                                       "mean": {k: float(base[k]) for k in METRICS},
                                       "std": {k: float(v) for k, v in base.get("_std", {}).items()}}, ensure_ascii=False))
 
@@ -124,7 +149,7 @@ def load_baseline(path, camera):
     """저장된 기준값을 읽는다. 다른 카메라에서 잰 값이거나 형식이 다르면 (None, None)."""
     try:
         d = json.loads(Path(path).read_text())
-        if d.get("version") != 1 or d.get("camera") != camera:
+        if d.get("version") != BASELINE_VERSION or d.get("camera") != camera:
             return None, None
         base = {k: d["mean"][k] for k in METRICS}
         base["_std"] = d.get("std", {})
