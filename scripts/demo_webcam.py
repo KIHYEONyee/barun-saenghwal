@@ -31,8 +31,8 @@ BASE_FILE = ROOT / "data/out/front_baseline.json"  # 마지막 기준 자세(숫
 MINE.parent.mkdir(parents=True, exist_ok=True)
 LM_HEADER = ",".join(f"{n}{i}" for i in range(33) for n in "xyzv")
 rec, rec_n = None, 0   # rec: None / 0(좋음) / 1(나쁨)
-CAL_SEC = 7            # 기준 자세 측정 시간(초)
-WARN_SEC = 8           # 문제가 이보다 오래 계속되면 빨간색
+CAL_SEC = 10           # 기준 자세 측정 시간(초). 기획 10~15초 중 짧은 쪽
+WARN_SEC = 10          # 문제가 이보다 오래 계속되면 빨간색(디자인 S10: 10초 이상 빨강 + 알림)
 
 def load_models():
     side = joblib.load(ROOT / "models/posture_rf.joblib")
