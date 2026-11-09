@@ -25,9 +25,11 @@ let brightness = 255, lastLum = 0, lastPost = 0;
 function loadBaseline(b) {
   // 같은 카메라·같은 형식으로 잰 기준만 쓴다
   if (!b || b.version !== R.BASELINE_VERSION || (device && b.camera !== device.label)) return null;
-  if (b.side) return { side: true };
+  if (b.side) return { side: true, cva: b.cva || null };   // cva 가 없으면(예전 기준) 고정 50°로 판정
   return { ...b.mean, _std: b.std || {} };
 }
+// 정면(웹캠)과 측면(정밀) 기준은 따로 저장된다
+const pickBaseline = (c) => loadBaseline(settings.mode === 'precise' ? c.sideBaseline : c.baseline);
 
 async function listDevices() {
   const all = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
@@ -126,16 +128,18 @@ function tickInner() {
   const raw = res.landmarks && res.landmarks[0];
   // 거울 화면 기준으로 맞춘다(화면 오른쪽 = 사용자 오른쪽). 파이썬 데모는 영상을 뒤집은 뒤 검출한다.
   const lm = raw ? raw.map((p) => [1 - p.x, p.y, p.z, p.visibility ?? 1]) : null;
-  const checks = { ...R.frameChecks(lm, w, h), brightness: Math.round(brightness), lightOk: brightness > 55 };
+  const checks = { ...R.frameChecks(lm, w, h), brightness: Math.round(brightness), lightOk: brightness > 55,
+    side: settings.mode === 'precise' && !!lm && R.cva(lm, w, h).angle !== null };   // 측면: 귀·어깨가 옆에서 보여 각도를 잴 수 있음
   const present = !!lm && lm[0][3] > 0.5;
 
   if (calib) { tickCalibration(lm, w, h, checks); return; }
 
-  let issues = [], level = 'good', rel = null, cva = null;
+  let issues = [], level = 'good', rel = null, cva = null, cvaRef = null;
   if (!present) { tracker.reset(); sm = null; level = 'away'; }
   else if (settings.mode === 'precise') {
-    const r = R.cva(lm, w, h); cva = r.angle;
-    issues = tracker.update(R.sideIssues(lm, w, h), Date.now());
+    const ref = base && base.cva;
+    const r = R.cva(lm, w, h, ref); cva = r.angle; cvaRef = ref || null;
+    issues = tracker.update(R.sideIssues(lm, w, h, ref), Date.now());
   } else if (!base) level = 'nobase';
   else {
     const m = R.metrics(lm, w, h);
@@ -147,19 +151,28 @@ function tickInner() {
       rel = {
         roll: sm.head_roll - base.head_roll, tilt: sm.shoulder_tilt - base.shoulder_tilt,
         faceRel: sm.face_ratio / base.face_ratio, neckRel: sm.neck_h / base.neck_h, pitch: sm.head_pitch - base.head_pitch,
-        sizeRel: sm.shoulder_w / base.shoulder_w, wristsUp,
+        sizeRel: sm.shoulder_w / base.shoulder_w, shift: sm.head_shift - base.head_shift, wristsUp,
       };
     }
   }
   if (issues.length) level = issues[0].dur >= R.WARN_SEC ? 'warning' : 'caution';
-  post({ present, level, issues, rel, cva, checks, landmarks: lm && lm.slice(0, 25).map((p) => [+(p[0].toFixed(4)), +(p[1].toFixed(4)), +(p[3].toFixed(2))]) });
+  post({ present, level, issues, rel, cva, cvaRef, checks, landmarks: lmOut(lm) });
 }
+
+// 화면에 선을 그릴 관절(0~24번) 좌표. 기준 측정 중에도 보내야 측정 화면에 선이 계속 보인다
+const lmOut = (lm) => lm && lm.slice(0, 25).map((p) => [+(p[0].toFixed(4)), +(p[1].toFixed(4)), +(p[3].toFixed(2))]);
 
 function tickCalibration(lm, w, h, checks) {
   const now = Date.now();
-  const m = lm && settings.mode !== 'precise' ? R.metrics(lm, w, h) : null;
-  const ok = settings.mode === 'precise' ? !!lm : !!m;
-  if (ok && m) {
+  const side = settings.mode === 'precise';
+  const m = lm && !side ? R.metrics(lm, w, h) : null;
+  const a = lm && side ? R.cva(lm, w, h).angle : null;   // 측면: 기준 측정 동안 목 각도를 모은다
+  const ok = side ? a !== null : !!m;
+  if (ok && side) {
+    const n = calib.samples.length;
+    if (n > 5 && Math.abs(a - calib.samples.reduce((s, x) => s + x.cva, 0) / n) > 6) { calib.samples = []; calib.start = now; calib.rewinds++; }
+    calib.samples.push({ cva: a });
+  } else if (ok && m) {
     // 움직임이 크면 처음부터(디자인 S2: 진행 바가 되감긴다)
     const n = calib.samples.length;
     if (n > 5) {
@@ -167,19 +180,21 @@ function tickCalibration(lm, w, h, checks) {
       if (Math.abs(m.head_roll - avg('head_roll')) > 6 || Math.abs(m.shoulder_w / avg('shoulder_w') - 1) > 0.1) { calib.samples = []; calib.start = now; calib.rewinds++; }
     }
     calib.samples.push(m);
-  } else if (ok) calib.samples.push({});
+  }
   const progress = Math.min(1, (now - calib.start) / (R.CAL_SEC * 1000));
   const steady = calib.samples.length > 5 && now - calib.start > 1500;
-  post({ present: !!lm, calibrating: { progress, left: Math.max(0, R.CAL_SEC - (now - calib.start) / 1000), samples: calib.samples.length, rewinds: calib.rewinds }, checks: { ...checks, steady }, issues: [], level: 'calibrating' });
+  post({ present: !!lm, cva: a, landmarks: lmOut(lm), calibrating: { progress, left: Math.max(0, R.CAL_SEC - (now - calib.start) / 1000), samples: calib.samples.length, rewinds: calib.rewinds }, checks: { ...checks, steady, side: a !== null }, issues: [], level: 'calibrating' });
   if (progress < 1) return;
   let result;
-  if (settings.mode === 'precise') {
-    result = calib.samples.length >= 15 ? { base: { side: true }, msg: '측면 기준 저장', reason: 'ok' } : { base: null, msg: '사람이 잘 안 보였어요. 다시 측정해 주세요.', reason: 'few' };
+  if (side) {
+    const xs = calib.samples.map((s) => s.cva).sort((p, q) => p - q);
+    const mid = xs[Math.floor(xs.length / 2)];   // 중간값: 잠깐 튄 프레임에 덜 흔들린다
+    result = xs.length >= 15 ? { base: { side: true, cva: mid }, msg: `측면 기준 저장 · 내 바른 자세 목 각도 ${mid.toFixed(0)}°`, reason: 'ok' } : { base: null, msg: '귀와 어깨가 옆에서 잘 안 보였어요. 몸 옆쪽이 보이게 앉아 다시 측정해 주세요.', reason: 'few' };
   } else result = R.makeBaseline(calib.samples.filter((s) => s.shoulder_w));
   calib = null;
   if (result.base) {
     base = result.base; sm = null; tracker.reset();
-    const save = result.base.side ? { version: R.BASELINE_VERSION, camera: device.label, side: true, saved: Date.now() }
+    const save = result.base.side ? { version: R.BASELINE_VERSION, camera: device.label, side: true, cva: result.base.cva, saved: Date.now() }
       : { version: R.BASELINE_VERSION, camera: device.label, saved: Date.now(), mean: Object.fromEntries(R.METRICS.map((k) => [k, base[k]])), std: base._std };
     window.barun.send('baseline', save);
   }
@@ -194,7 +209,7 @@ window.barun.on('cmd', async (c) => {
   if (c.type === 'settings') {
     const camChanged = c.settings.cameraId !== settings.cameraId;
     settings = c.settings; tracker = new R.IssueTracker(c.cautionSec);
-    if (camChanged && !fakeImg) { stopCamera(); await startCamera(); base = loadBaseline((await window.barun.invoke('get-analyzer-config')).baseline); }
+    if (camChanged && !fakeImg) { stopCamera(); await startCamera(); base = pickBaseline(await window.barun.invoke('get-analyzer-config')); }
   }
   if (c.type === 'report-good' && sm && base && !base.side) {
     // "지금 바른 자세인데요": 지금 자세를 기준 쪽으로 30% 섞어 다음부터 덜 예민하게
@@ -206,7 +221,7 @@ window.barun.on('cmd', async (c) => {
 });
 
 await startCamera();
-base = loadBaseline(cfg.baseline);
+base = pickBaseline(cfg);
 landmarker = await createLandmarker();
 if (paused && !fakeImg) stopCamera();
 // 타이머는 워커에서 돌린다: 브라우저는 뒤에 있는 탭의 setInterval 을 1초 이상으로 늦추지만 워커 타이머는 덜 늦춘다

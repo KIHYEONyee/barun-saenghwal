@@ -44,11 +44,13 @@
   class StoreCore {
     constructor(persist) {
       this.persist = persist;
-      this.data = { settings: { ...DEFAULT_SETTINGS }, baseline: null, days: {}, emergency: { date: '', used: 0 } };
+      this.data = { settings: { ...DEFAULT_SETTINGS }, baseline: null, sideBaseline: null, days: {}, emergency: { date: '', used: 0 } };
       try {
         const d = persist.load();
         if (d) this.data = { ...this.data, ...d, settings: { ...DEFAULT_SETTINGS, ...(d.settings || {}) } };
       } catch { /* 처음 실행이거나 저장 파일이 깨짐 */ }
+      // 예전에는 정면·측면 기준을 한 칸에 덮어썼다. 측면 기준이 들어 있으면 측면 칸으로 옮긴다
+      if (this.data.baseline && this.data.baseline.side) { this.data.sideBaseline = this.data.baseline; this.data.baseline = null; }
       this.timer = null;
     }
     get settings() { return this.data.settings; }

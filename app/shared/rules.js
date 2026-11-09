@@ -144,10 +144,15 @@
   }
 
   // 측면(정밀 모드) CVA 판정. scripts/posture_rules.py cva() 와 같음
-  const CVA_NORMAL = 50.0, CVA_MILD = 45.0, CVA_SEVERE = 40.0;
-  function cva(lm, w, h) {
-    const side = lm[7][3] + lm[11][3] >= lm[8][3] + lm[12][3] ? 0 : 1;
-    const ear = lm[7 + side], sh = lm[11 + side], nose = lm[0];
+  // ref: 기준 측정 때 잰 내 바른 자세 각도. 없으면 고정 50°. 단계 간격 5°는 고정 기준 50/45/40의 간격과 같다
+  const CVA_NORMAL = 50.0, CVA_MILD = 45.0, CVA_SEVERE = 40.0, CVA_STEP = 5.0;
+  function cva(lm, w, h, ref) {
+    const normal = ref || CVA_NORMAL;
+    // 카메라 쪽 귀 고르기: 비스듬히 앉으면 반대쪽 귀는 코 근처에 겹쳐 보이므로, 코에서 가로로 더 먼 귀가 카메라 쪽이다
+    // (예전엔 가시성으로 골랐는데, 가려진 귀도 가시성이 높게 나와 엉뚱한 쪽을 고르는 일이 있었다)
+    const nose = lm[0];
+    const side = Math.abs(lm[7][0] - nose[0]) * w >= Math.abs(lm[8][0] - nose[0]) * w ? 0 : 1;
+    const ear = lm[7 + side], sh = lm[11 + side];
     if (Math.min(ear[3], sh[3]) < MIN_VIS) return { angle: null, label: '귀/어깨가 안 보임' };
     const ex = ear[0] * w, ey = ear[1] * h, sx = sh[0] * w, sy = sh[1] * h;
     const facing = nose[0] * w >= ex ? 1 : -1;
@@ -156,14 +161,15 @@
     if (up <= 0) return { angle: null, label: '귀가 어깨보다 아래(정면/고개 숙임)' };
     const angle = deg(Math.atan2(up, forward));
     if (Math.abs(ex - sx) < 0.25 * up && Math.abs(nose[0] * w - ex) < 0.25 * up) return { angle: null, label: '정면에 가까워 측면 판정 불가' };
-    const label = angle >= CVA_NORMAL ? '정상' : angle >= CVA_MILD ? '경계' : angle >= CVA_SEVERE ? '거북목' : '심한 거북목';
+    const label = angle >= normal ? '정상' : angle >= normal - CVA_STEP ? '경계' : angle >= normal - 2 * CVA_STEP ? '거북목' : '심한 거북목';
     return { angle, label };
   }
   // 측면 모드 문제 목록(정면과 같은 형식)
-  function sideIssues(lm, w, h) {
-    const r = cva(lm, w, h);
-    if (r.angle === null || r.angle >= CVA_MILD) return [];
-    return [{ part: 'neck', key: 'turtle', ko: `목이 앞으로 나와 있어요 (CVA ${r.angle.toFixed(0)}°)`, en: 'TURTLE NECK', sev: CVA_MILD / Math.max(r.angle, 1), dir: 0 }];
+  function sideIssues(lm, w, h, ref) {
+    const r = cva(lm, w, h, ref);
+    const mild = (ref || CVA_NORMAL) - CVA_STEP;
+    if (r.angle === null || r.angle >= mild) return [];
+    return [{ part: 'neck', key: 'turtle', ko: '목이 앞으로 나와 있어요', en: 'TURTLE NECK', sev: mild / Math.max(r.angle, 1), dir: 0 }];
   }
 
   // 기준 측정 화면(S2) 체크리스트: 어깨 보임, 화면과 거리

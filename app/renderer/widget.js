@@ -25,12 +25,17 @@ document.addEventListener('mouseleave', () => { if (!drag) setIgnore(true); });
 
 // 끌기: 4px 이상 움직이면 이동, 아니면 클릭(메뉴)
 let drag = null;
-w.addEventListener('mousedown', async (e) => {
-  const [x, y] = await B.invoke('widget-pos');
-  drag = { sx: e.screenX, sy: e.screenY, x, y, moved: false };
+// drag 는 누르는 즉시 만든다. 위치를 받은 뒤에 만들면, 빨리 클릭했을 때 mouseup 이 먼저 지나가 버려
+// 버튼을 뗀 뒤에도 끌기 상태가 남고, 이후 마우스가 닿기만 해도 캐릭터가 따라왔다
+w.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  const d = (drag = { sx: e.screenX, sy: e.screenY, x: null, y: null, moved: false });
+  B.invoke('widget-pos').then(([x, y]) => { d.x = x; d.y = y; });
 });
 window.addEventListener('mousemove', (e) => {
   if (!drag) return;
+  if (!(e.buttons & 1)) { drag = null; setIgnore(!onCharacter(e)); return; }   // 버튼을 뗀 상태면 끌기 취소(놓친 mouseup 대비)
+  if (drag.x === null) return;   // 아직 위치를 못 받음
   const dx = e.screenX - drag.sx, dy = e.screenY - drag.sy;
   if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
   if (drag.moved) B.send('widget-move', { x: drag.x + dx, y: drag.y + dy });

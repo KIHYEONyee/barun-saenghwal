@@ -48,9 +48,10 @@ function webPrefs(extra = {}) {
 // ---------- 창 ----------
 function createAnalyzer() {
   if (win.analyzer || store.settings.mode === 'basic' || !store.settings.mode) return;
-  win.analyzer = new BrowserWindow({ show: false, width: 640, height: 480, webPreferences: webPrefs({ backgroundThrottling: false }) });
-  win.analyzer.loadURL(pageURL('analyzer.html'));
-  win.analyzer.on('closed', () => { win.analyzer = null; });
+  const w = (win.analyzer = new BrowserWindow({ show: false, width: 640, height: 480, webPreferences: webPrefs({ backgroundThrottling: false }) }));
+  w.loadURL(pageURL('analyzer.html'));
+  // 모드를 바꾸면 옛 분석 창을 닫고 새로 만든다. 옛 창의 closed 가 늦게 와도 새 창을 지우지 않게 자기 자신일 때만 비운다
+  w.on('closed', () => { if (win.analyzer === w) win.analyzer = null; });
 }
 function destroyAnalyzer() { if (win.analyzer) { win.analyzer.destroy(); win.analyzer = null; } }
 
@@ -219,7 +220,7 @@ function registerIpc() {
   ipcMain.on('posture', (e, p) => onPosture(p));
   ipcMain.on('devices', (e, list) => { live.devices = list; pushLive(); });
   ipcMain.handle('dev-info', () => ({ fakeImage: DEV.fakeImage ? 'app://bundle/__fake__' : null, shots: !!DEV.shots }));
-  ipcMain.handle('get-all', () => ({ settings: store.settings, baseline: store.data.baseline, days: store.data.days, live: liveState(), unlocks: store.unlocks(), emergencyLeft: store.emergencyLeft(), today: today(), platform: process.platform }));
+  ipcMain.handle('get-all', () => ({ settings: store.settings, baseline: store.data.baseline, sideBaseline: store.data.sideBaseline, days: store.data.days, live: liveState(), unlocks: store.unlocks(), emergencyLeft: store.emergencyLeft(), today: today(), platform: process.platform }));
   ipcMain.handle('set-settings', (e, patch) => {
     const before = { ...store.settings };
     const s = store.setSettings(patch);
@@ -236,8 +237,8 @@ function registerIpc() {
     updateWidget();
     return s;
   });
-  ipcMain.handle('get-analyzer-config', () => ({ settings: store.settings, baseline: store.data.baseline, cautionSec: cautionSec(), paused: paused(), fakeImage: DEV.fakeImage ? 'app://bundle/__fake__' : null }));
-  ipcMain.on('baseline', (e, b) => { store.data.baseline = b; store.save(); broadcast('baseline', b); });
+  ipcMain.handle('get-analyzer-config', () => ({ settings: store.settings, baseline: store.data.baseline, sideBaseline: store.data.sideBaseline, cautionSec: cautionSec(), paused: paused(), fakeImage: DEV.fakeImage ? 'app://bundle/__fake__' : null }));
+  ipcMain.on('baseline', (e, b) => { store.data[b.side ? 'sideBaseline' : 'baseline'] = b; store.save(); broadcast('baseline', b); });
   ipcMain.on('calibrate', () => { createAnalyzer(); send(win.analyzer, 'cmd', { type: 'calibrate' }); });
   ipcMain.on('cancel-calibrate', () => send(win.analyzer, 'cmd', { type: 'cancel-calibrate' }));
   ipcMain.on('onboarding-done', () => { createWidget(); createTray(); });

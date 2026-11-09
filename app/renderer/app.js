@@ -78,6 +78,34 @@ function drawLandmarks(canvas) {
     if (!lm[a] || !lm[b] || lm[a][2] < 0.5 || lm[b][2] < 0.5) continue;
     ctx.beginPath(); ctx.moveTo(X(lm[a]), Y(lm[a])); ctx.lineTo(X(lm[b]), Y(lm[b])); ctx.stroke();
   }
+  if (D.settings.mode === 'precise') drawCva(ctx, lm, X, Y);
+}
+let cvaView = null;
+// 정밀 모드: 귀–어깨 선과 어깨의 수평선, 그 사이 각도(CVA)를 그린다. 고르는 쪽은 rules.js cva() 와 같다
+function drawCva(ctx, lm, X, Y) {
+  const angle = LIVE.posture && LIVE.posture.cva;
+  if (angle == null) return;
+  const i = Math.abs(lm[7][0] - lm[0][0]) >= Math.abs(lm[8][0] - lm[0][0]) ? 0 : 1;
+  // 화면에 그리는 점과 숫자는 직전 값과 섞어 부드럽게(판정에는 영향 없음)
+  const raw = [X(lm[7 + i]), Y(lm[7 + i]), X(lm[11 + i]), Y(lm[11 + i]), angle];
+  cvaView = cvaView && cvaView.i === i ? { i, v: cvaView.v.map((o, j) => 0.7 * o + 0.3 * raw[j]) } : { i, v: raw };
+  const [ex, ey, sx, sy, shown] = cvaView.v;
+  const dir = X(lm[0]) >= ex ? 1 : -1;   // 얼굴이 향한 쪽으로 수평선을 긋는다
+  const len = Math.hypot(ex - sx, ey - sy), t = Math.atan2(ey - sy, ex - sx);
+  ctx.save();
+  ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.setLineDash([8, 6]); ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx + dir * len, sy); ctx.stroke();
+  ctx.setLineDash([]);
+  const r = len * 0.35;
+  ctx.beginPath(); ctx.arc(sx, sy, r, dir > 0 ? t : -Math.PI, dir > 0 ? 0 : t); ctx.stroke();
+  for (const [x, y] of [[ex, ey], [sx, sy]]) { ctx.beginPath(); ctx.arc(x, y, 7, 0, 2 * Math.PI); ctx.fillStyle = '#ffd166'; ctx.fill(); }
+  const mid = dir > 0 ? t / 2 : (t - Math.PI) / 2;
+  ctx.font = '700 26px system-ui'; ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = 6;
+  ctx.fillText(`${Math.round(shown)}°`, sx + Math.cos(mid) * (r + 34), sy + Math.sin(mid) * (r + 34));
+  ctx.restore();
 }
 
 // ---------- 라우팅 ----------
@@ -85,7 +113,7 @@ let page = null;   // { update() } 현재 화면의 실시간 갱신 함수
 window.addEventListener('hashchange', render);
 B.on('navigate', (h) => { location.hash = h; });
 B.on('live', (s) => { LIVE = s; if (page && page.update) page.update(); });
-B.on('baseline', (b) => { D.baseline = b; });
+B.on('baseline', (b) => { D[b.side ? 'sideBaseline' : 'baseline'] = b; });
 setInterval(async () => { if (['home', 'report'].includes(route()[0])) { D = await B.invoke('get-all'); if (page && page.refresh) page.refresh(); } }, 10000);
 const route = () => (location.hash.slice(1) || (D.settings.mode ? 'home' : 'onboard-mode')).split('/');
 
@@ -153,6 +181,8 @@ function pageHome(main) {
       actions = `<button class="dark" data-go="stretch/${st.id}">${st.name} ${S.duration(st)}초</button><button id="good">지금 바른 자세인데요</button>`;
     } else if (LIVE.restDue) { cls = 'caution'; eyebrow = '휴식'; title = `${Math.round(LIVE.sitMin)}분째 앉아 있어요`; body = '잠깐 일어나거나 스트레칭 해볼까요?'; pose = 'rest'; const st = S.recommend(d.issues, 1)[0]; actions = `<button class="dark" data-go="stretch/${st.id}">${st.name} 시작</button>`; }
     else { cls = 'good'; eyebrow = '바른 자세'; title = '바른 자세를 유지하고 있어요'; body = LIVE.sitMin >= 1 ? `${Math.round(LIVE.sitMin)}분째 앉아 있어요. ${D.settings.sitReminderMin}분이 되면 쉬자고 알려 드릴게요.` : '좋아요, 이대로 계속해요.'; }
+    // 정밀 모드: 지금 목 각도와 내 기준을 같이 보여준다
+    if (D.settings.mode === 'precise' && p.present && p.cva != null) body += ` 지금 목 각도 ${Math.round(p.cva)}° · ${p.cvaRef ? `내 기준 ${Math.round(p.cvaRef)}°` : '기준 50°(측정하면 내 기준으로 바뀌어요)'}`;
     // 타임라인(10분 단위, 첫 기록 ~ 지금)
     const slots = Object.keys(d.tl).sort();
     let tl = '', tlRange = '기록 없음';
@@ -272,19 +302,21 @@ function pageReport(main, arg) {
 function pageStretch(main, id) {
   const st = id && S.byId(id);
   if (!st) {
-    const recs = S.recommend(dayOf(new Date()).issues, 5);
-    main.innerHTML = `<h1>스트레칭</h1><div class="muted">오늘 많았던 자세 문제 순서로 보여 드려요. ${D.settings.mode === 'basic' ? '기본 모드에서는 타이머만 흘러요.' : '카메라가 동작을 확인해야 타이머가 흘러요.'}</div>
+    const recs = S.recommend(dayOf(new Date()).issues, S.LIST.length);
+    main.innerHTML = `<h1>스트레칭</h1><div class="muted">오늘 많았던 자세 문제 순서로 보여 드려요. ${D.settings.mode === 'webcam' ? '카메라가 동작을 확인해야 타이머가 흘러요.' : '이 모드에서는 동작 확인 없이 타이머만 흘러요.'}</div>
       <div class="st-list">${recs.map((s) => `<div class="card st-card"><div class="pic">${critter(s.pose, { tint: 'none' })}</div><b>${s.name}</b><div class="small muted">${s.forText} · ${s.steps.length}동작 · ${S.duration(s)}초</div><button class="primary" data-go="stretch/${s.id}">시작</button></div>`).join('')}</div>`;
     main.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => { location.hash = b.dataset.go; }));
     return;
   }
   const useCam = D.settings.mode !== 'basic';
+  // 동작 확인은 정면 기준(웹캠 모드)으로만 할 수 있다. 정밀(측면) 모드는 기준 대비 값이 없어 타이머만 흐른다
+  const checkCam = D.settings.mode === 'webcam';
   let stepI = 0, held = 0, lastT = Date.now(), done = false;
   main.innerHTML = `
     <div class="row"><a href="#home" class="muted" style="text-decoration:none">← 홈</a><div style="margin:0 auto;text-align:center"><h2>${st.name}</h2><div class="muted small" id="st-sub"></div></div><button class="ghost" id="skip">건너뛰기</button></div>
     <div class="follow">
       <div class="demo"><div class="art" id="st-art">${critter(st.pose, { tint: 'none' })}</div><div class="pill" id="st-text"></div></div>
-      <div class="cam" id="st-cam" style="height:430px"><span class="tag">내 카메라</span><span class="ok-badge no" id="st-ok">${useCam ? '동작을 보여 주세요' : '타이머'}</span>
+      <div class="cam" id="st-cam" style="height:430px"><span class="tag">내 카메라</span><span class="ok-badge no" id="st-ok">${checkCam ? '동작을 보여 주세요' : '타이머'}</span>
         <div class="ring"><svg viewBox="0 0 100 100" width="100%" height="100%"><circle cx="50" cy="50" r="44" fill="none" stroke="rgba(255,255,255,.25)" stroke-width="7"/><circle id="st-ring" cx="50" cy="50" r="44" fill="none" stroke="oklch(0.8 0.15 155)" stroke-width="7" stroke-linecap="round" stroke-dasharray="276.5" stroke-dashoffset="276.5" transform="rotate(-90 50 50)"/></svg><div class="num"><span id="st-num">0</span><small id="st-hold"></small></div></div></div>
     </div>
     <div class="steps" id="st-steps"></div>`;
@@ -294,7 +326,7 @@ function pageStretch(main, id) {
     const s = st.steps[stepI];
     const now = Date.now(), dt = (now - lastT) / 1000; lastT = now;
     const rel = LIVE.posture && LIVE.posture.rel;
-    const ok = !useCam || !s.check || (rel && s.check(rel));
+    const ok = !checkCam || !s.check || (rel && s.check(rel));
     if (ok) held += dt;
     $('#st-sub').textContent = `${st.forText} · ${stepI + 1} / ${st.steps.length} 동작`;
     $('#st-text').textContent = s.text;
@@ -302,7 +334,7 @@ function pageStretch(main, id) {
     $('#st-hold').textContent = `/ ${s.hold}초 유지`;
     $('#st-ring').setAttribute('stroke-dashoffset', 276.5 * (1 - Math.min(1, held / s.hold)));
     const badge = $('#st-ok');
-    if (useCam && s.check) { badge.className = `ok-badge ${ok ? '' : 'no'}`; badge.textContent = ok ? '✓ 동작 인식됨' : (rel ? s.hint : '기준 자세가 필요해요'); }
+    if (checkCam && s.check) { badge.className = `ok-badge ${ok ? '' : 'no'}`; badge.textContent = ok ? '✓ 동작 인식됨' : (rel ? s.hint : '기준 자세가 필요해요'); }
     $('#st-steps').innerHTML = st.steps.map((_, i) => `<i class="${i <= stepI ? 'on' : ''}"></i>`).join('');
     if (held >= s.hold) {
       stepI++; held = 0;
@@ -345,7 +377,7 @@ function pageSettings(main, tab = 'widget') {
       ${item('카메라', '맥에서는 아이폰 연속성 카메라보다 내장 카메라를 먼저 골라요', `<select id="cam"><option value="">자동 선택</option>${devs.map((d) => `<option value="${esc(d.id)}" ${d.id === s.cameraId ? 'selected' : ''}>${esc(d.label)}</option>`).join('')}</select>`)}
       ${item('경고 민감도', '나쁜 자세가 이 시간 이상 계속되면 위젯이 노랗게 바뀌어요', seg('sensitivity', [['fast', '빠르게 2초'], ['normal', '보통 3초'], ['relaxed', '느긋하게 5초']]))}
       ${item('오래 앉음 알림', '이 시간 넘게 계속 앉아 있으면 쉬자고 알려요', `<select id="sit">${[30, 40, 50, 60, 90].map((m) => `<option ${m === s.sitReminderMin ? 'selected' : ''} value="${m}">${m}분</option>`).join('')}</select>`)}
-      ${item('기준 자세', D.baseline ? `저장됨 · ${new Date(D.baseline.saved).toLocaleString('ko-KR')} · ${esc(D.baseline.camera)}` : '아직 없어요', `<button id="recal">다시 측정</button>`)}`;
+      ${item('기준 자세', [['정면', D.baseline], ['측면', D.sideBaseline]].map(([n, b]) => `${n}: ${b ? `저장됨${b.cva ? ` · 목 각도 ${Math.round(b.cva)}°` : ''} · ${new Date(b.saved).toLocaleString('ko-KR')} · ${esc(b.camera)}` : '아직 없어요'}`).join('<br>'), `<button id="recal">다시 측정</button>`)}`;
   } else if (tab === 'focus') {
     pane = `<div class="card" style="background:var(--caution-soft);border:0;margin-bottom:8px"><b>집중 교정 모드란?</b><div class="small" style="margin-top:6px;line-height:1.6">나쁜 자세가 오래 계속되면 화면 전체를 덮어 바르게 앉도록 해요. 카메라로 바른 자세 3초를 확인한 뒤 "바른 자세로 앉자"를 입력하면 풀려요. 판정 확신도가 높을 때만 뜨고, 하루 ${s.emergencyPerDay}번은 바로 넘길 수 있어요(오늘 ${D.emergencyLeft}번 남음).</div></div>
       ${item('집중 교정 모드', '기본은 꺼져 있어요', tog('focusMode'))}
@@ -408,7 +440,9 @@ function pageCalib() {
   const side = D.settings.mode === 'precise';
   app.innerHTML = `<div class="onb"><div class="calib">
       <div class="cam" id="cal-cam"><span class="tag">웹캠 미리보기 (좌우 반전)</span><span class="badge" id="cal-badge">${side ? '측면' : '정면'}</span>
-        <svg class="silhouette" viewBox="0 0 100 100" preserveAspectRatio="none"><ellipse cx="50" cy="42" rx="11" ry="15" fill="none" stroke="oklch(0.85 0.12 160)" stroke-width=".5" stroke-dasharray="1.5 1.2"/><path d="M18 100 Q20 62 50 60 Q80 62 82 100" fill="none" stroke="oklch(0.85 0.12 160)" stroke-width=".5" stroke-dasharray="1.5 1.2"/></svg>
+        <svg class="silhouette" viewBox="0 0 100 100" preserveAspectRatio="none" fill="none" stroke="oklch(0.85 0.12 160)" stroke-width=".5" stroke-dasharray="1.5 1.2">${side
+          ? '<ellipse cx="50" cy="40" rx="10" ry="14"/><path d="M59.5 36 L64 44 L59 46"/><path d="M40.5 36 L36 44 L41 46"/><path d="M43 52 Q41 62 34 67 Q24 74 22 100"/><path d="M56 54 Q58 63 66 69 Q75 77 77 100"/>'   // 측면: 옆얼굴(어느 쪽으로 앉아도 되게 코를 양쪽에) + 한쪽 어깨
+          : '<ellipse cx="50" cy="42" rx="11" ry="15"/><path d="M18 100 Q20 62 50 60 Q80 62 82 100"/>'}</svg>
         <canvas id="cal-lm"></canvas><div class="toast" id="cal-toast" style="display:none"></div></div>
       <div style="display:flex;flex-direction:column"><div class="step">2 / 3 단계</div><h1 style="margin:6px 0 8px">평소 바른 자세를<br>기억할게요</h1>
         <div class="muted" style="line-height:1.6">이 자세를 기준으로 얼마나 달라졌는지 판단해요. 체형이 달라도 정확해져요.${side ? ' 정밀 모드는 몸이 옆으로 보이게 앉아 주세요.' : ''}</div>
@@ -430,12 +464,12 @@ function pageCalib() {
     const steady = p.calibrating ? (p.calibrating.rewinds ? 'warn' : c.steady || false) : result && result.ok;
     $('#cal-checks').innerHTML = [
       [c.lightOk ?? false, '조명이 충분해요', c.lightOk === false ? '조금 어두워요' : ''],
-      [c.shoulders || false, side ? '몸이 보여요' : '양쪽 어깨가 보여요', ''],
+      [(side ? c.side : c.shoulders) || false, side ? '귀와 어깨가 옆에서 보여요' : '양쪽 어깨가 보여요', side && p.cva != null ? `목 각도 ${Math.round(p.cva)}°` : ''],
       [side ? true : dist, '화면과 거리', c.distance === 'near' ? '조금 가까워요' : c.distance === 'far' ? '조금 멀어요' : ''],
       [steady, '움직이지 않고 유지', p.calibrating && p.calibrating.rewinds ? '움직여서 다시 시작했어요' : ''],
     ].map(([st, t, v]) => `<div class="check">${ic(st)}<span>${t}</span><span class="val">${v}</span></div>`).join('');
     const toast = $('#cal-toast');
-    const tip = c.distance === 'near' ? '조금 더 뒤로 앉아주세요' : c.distance === 'far' ? '조금 더 가까이 앉아주세요' : !c.shoulders && p.present !== undefined ? '얼굴과 양 어깨가 보이게 앉아주세요' : '';
+    const tip = c.distance === 'near' ? '조금 더 뒤로 앉아주세요' : c.distance === 'far' ? '조금 더 가까이 앉아주세요' : !(side ? c.side : c.shoulders) && p.present !== undefined ? (side ? '몸 옆쪽이 보이게 앉아주세요' : '얼굴과 양 어깨가 보이게 앉아주세요') : '';
     toast.style.display = tip && !result ? 'block' : 'none'; toast.textContent = tip;
     if (p.calibrating) {
       $('#cal-bar').style.width = `${p.calibrating.progress * 100}%`;
@@ -450,7 +484,7 @@ function pageCalib() {
       $('#cal-done').disabled = !result.ok;
     }
     // 준비(조명·어깨·거리)가 1초 이상 맞으면 자동 시작
-    const ready = c.lightOk && c.shoulders && (side || c.distance === 'ok');
+    const ready = c.lightOk && (side ? c.side : c.shoulders && c.distance === 'ok');
     if (!started && !result) { if (ready) { readySince ||= Date.now(); if (Date.now() - readySince > 1000) start(); } else readySince = 0; }
   };
   setPage({ update });
